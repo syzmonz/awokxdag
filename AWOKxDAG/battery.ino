@@ -7,18 +7,16 @@ constexpr uint32_t kBatterySaveIntervalMs = 60000;
 constexpr float kBatterySaveDeltaMah = 1.0f;
 constexpr float kBatteryDefaultCapacityMah = 2000.0f;
 constexpr char kBatteryNvsNamespace[] = "axd_batt";
-constexpr uint32_t kBatteryNvsVersion = 2;
+constexpr uint32_t kBatteryNvsVersion = 3;
 
 enum : uint8_t { kPowerIdle, kPowerScan, kPowerTx };
 
 struct BatteryNvsRecord {
   uint32_t version;
   float consumedMah;
-  float activeSec;
 };
 
 double batteryConsumedMah = 0.0;
-double batteryActiveSec = 0.0;
 uint32_t lastBatteryTickMs = 0;
 uint32_t lastBatterySaveMs = 0;
 float lastSavedConsumedMah = 0.0f;
@@ -83,8 +81,7 @@ void saveBatteryEstimate() {
   Preferences p;
   if (!p.begin(kBatteryNvsNamespace, false)) return;
   BatteryNvsRecord rec{kBatteryNvsVersion,
-                       static_cast<float>(batteryConsumedMah),
-                       static_cast<float>(batteryActiveSec)};
+                       static_cast<float>(batteryConsumedMah)};
   p.putBytes("batt", &rec, sizeof(rec));
   p.end();
   lastSavedConsumedMah = static_cast<float>(batteryConsumedMah);
@@ -93,7 +90,6 @@ void saveBatteryEstimate() {
 
 void loadBatteryEstimate() {
   batteryConsumedMah = 0.0;
-  batteryActiveSec = 0.0;
   lastBatteryTickMs = millis();
   lastBatterySaveMs = millis();
   lastSavedConsumedMah = 0.0f;
@@ -107,10 +103,7 @@ void loadBatteryEstimate() {
       float c = rec.consumedMah;
       if (c < 0.0f) c = 0.0f;
       if (c > batteryCapacityMah()) c = batteryCapacityMah();
-      float a = rec.activeSec;
-      if (a < 0.0f) a = 0.0f;
       batteryConsumedMah = c;
-      batteryActiveSec = a;
       lastSavedConsumedMah = c;
     }
   }
@@ -119,7 +112,6 @@ void loadBatteryEstimate() {
 
 void resetBatteryEstimate() {
   batteryConsumedMah = 0.0;
-  batteryActiveSec = 0.0;
   lastBatteryTickMs = millis();
   saveBatteryEstimate();
 }
@@ -136,7 +128,6 @@ void updateBatteryEstimate() {
   batteryConsumedMah += drain * (dt / 3600000.0);
   const float cap = batteryCapacityMah();
   if (batteryConsumedMah > cap) batteryConsumedMah = cap;
-  batteryActiveSec += dt / 1000.0;
 
   if (now - lastBatterySaveMs >= kBatterySaveIntervalMs &&
       fabsf(static_cast<float>(batteryConsumedMah) - lastSavedConsumedMah) >=
@@ -154,23 +145,19 @@ String batteryEstimateString(int& pctOut) {
   if (pct > 100) pct = 100;
   pctOut = pct;
 
-  float avgMa = kCurrentIdleMa;
-  if (batteryActiveSec > 30.0 && batteryConsumedMah > 0.0) {
-    avgMa = static_cast<float>(batteryConsumedMah /
-                               (batteryActiveSec / 3600.0));
-  }
-  if (avgMa < 1.0f) avgMa = 1.0f;
-  int minsLeft = static_cast<int>(remaining / avgMa * 60.0f);
+  float idleMa = batteryPresentCurrentMa(kPowerIdle);
+  if (idleMa < 1.0f) idleMa = 1.0f;
+  int minsLeft = static_cast<int>(remaining / idleMa * 60.0f);
   if (minsLeft < 0) minsLeft = 0;
   minsLeft = (minsLeft + 7) / 15 * 15;
   if (minsLeft > 5999) minsLeft = 5999;
 
   char buf[48];
   if (minsLeft >= 60) {
-    snprintf(buf, sizeof(buf), "~%dh%02dm (est, %d%%)", minsLeft / 60,
-             minsLeft % 60, pct);
+    snprintf(buf, sizeof(buf), "%d%%  ~%dh%02dm idle", pct, minsLeft / 60,
+             minsLeft % 60);
   } else {
-    snprintf(buf, sizeof(buf), "~%dm (est, %d%%)", minsLeft, pct);
+    snprintf(buf, sizeof(buf), "%d%%  ~%dm idle", pct, minsLeft);
   }
   return String(buf);
 }
