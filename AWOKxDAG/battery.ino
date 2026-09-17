@@ -10,7 +10,7 @@ constexpr float kBatterySaveDeltaMah = 1.0f;
 constexpr char kBatteryNvsNamespace[] = "axd_batt";
 constexpr uint32_t kBatteryNvsVersion = 1;
 
-enum class PowerMode : uint8_t { kIdle, kScan, kTx };
+enum : uint8_t { kPowerIdle, kPowerScan, kPowerTx };
 
 struct BatteryNvsRecord {
   uint32_t version;
@@ -23,13 +23,13 @@ uint32_t lastBatteryTickMs = 0;
 uint32_t lastBatterySaveMs = 0;
 float lastSavedConsumedMah = 0.0f;
 
-PowerMode batteryModeForView(View v) {
+uint8_t batteryModeForView(View v) {
   switch (v) {
     case View::kDeauthAttack:
     case View::kBeaconFlood:
     case View::kEvilPortal:
     case View::kProbeLure:
-      return PowerMode::kTx;
+      return kPowerTx;
     case View::kHome:
     case View::kSaved:
     case View::kStatus:
@@ -39,16 +39,16 @@ PowerMode batteryModeForView(View v) {
     case View::kNetworkMenu:
     case View::kNetworkSetup:
     case View::kNetworkEdit:
-      return PowerMode::kIdle;
+      return kPowerIdle;
     default:
-      return PowerMode::kScan;
+      return kPowerScan;
   }
 }
 
-float batteryBaseCurrentMa(PowerMode m) {
+float batteryBaseCurrentMa(uint8_t m) {
   switch (m) {
-    case PowerMode::kTx: return kCurrentTxMa;
-    case PowerMode::kScan: return kCurrentScanMa;
+    case kPowerTx: return kCurrentTxMa;
+    case kPowerScan: return kCurrentScanMa;
     default: return kCurrentIdleMa;
   }
 }
@@ -61,7 +61,7 @@ float batteryBacklightMa() {
   return kBacklightFullMa * (b / 100.0f);
 }
 
-float batteryPresentCurrentMa(PowerMode m) {
+float batteryPresentCurrentMa(uint8_t m) {
   float base = batteryBaseCurrentMa(m) - kBacklightFullMa;
   if (base < 0.0f) base = 0.0f;
   return base + batteryBacklightMa();
@@ -156,8 +156,9 @@ String batteryEstimateString(int& pctOut) {
   int minsLeft = static_cast<int>(remaining / ma * 60.0f);
   if (minsLeft < 0) minsLeft = 0;
   minsLeft = (minsLeft + 7) / 15 * 15;
+  if (minsLeft > 5999) minsLeft = 5999;
 
-  char buf[24];
+  char buf[48];
   if (minsLeft >= 60) {
     snprintf(buf, sizeof(buf), "~%dh%02dm (est, %d%%)", minsLeft / 60,
              minsLeft % 60, pct);
