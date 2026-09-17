@@ -1,27 +1,32 @@
-constexpr float kBatteryCapacityMah = 1000.0f;
 constexpr float kCurrentIdleMa = 150.0f;
 constexpr float kCurrentScanMa = 300.0f;
 constexpr float kCurrentTxMa = 480.0f;
 constexpr float kBacklightFullMa = 60.0f;
 constexpr float kBoostSagMax = 0.35f;
-constexpr float kCurrentAvgTauMs = 30000.0f;
 constexpr uint32_t kBatterySaveIntervalMs = 60000;
 constexpr float kBatterySaveDeltaMah = 1.0f;
+constexpr float kBatteryDefaultCapacityMah = 2000.0f;
 constexpr char kBatteryNvsNamespace[] = "axd_batt";
-constexpr uint32_t kBatteryNvsVersion = 1;
+constexpr uint32_t kBatteryNvsVersion = 2;
 
 enum : uint8_t { kPowerIdle, kPowerScan, kPowerTx };
 
 struct BatteryNvsRecord {
   uint32_t version;
   float consumedMah;
+  float activeSec;
 };
 
 double batteryConsumedMah = 0.0;
-float batteryAvgCurrentMa = kCurrentIdleMa;
+double batteryActiveSec = 0.0;
 uint32_t lastBatteryTickMs = 0;
 uint32_t lastBatterySaveMs = 0;
 float lastSavedConsumedMah = 0.0f;
+
+float batteryCapacityMah() {
+  float c = static_cast<float>(deviceSettings.batteryCapacityMah);
+  return c > 0.0f ? c : kBatteryDefaultCapacityMah;
+}
 
 uint8_t batteryModeForView(View v) {
   switch (v) {
@@ -68,7 +73,7 @@ float batteryPresentCurrentMa(uint8_t m) {
 }
 
 float batterySagFactor(float consumedMah) {
-  float soc = 1.0f - consumedMah / kBatteryCapacityMah;
+  float soc = 1.0f - consumedMah / batteryCapacityMah();
   if (soc < 0.0f) soc = 0.0f;
   if (soc > 1.0f) soc = 1.0f;
   return 1.0f + kBoostSagMax * (1.0f - soc);
@@ -78,7 +83,8 @@ void saveBatteryEstimate() {
   Preferences p;
   if (!p.begin(kBatteryNvsNamespace, false)) return;
   BatteryNvsRecord rec{kBatteryNvsVersion,
-                       static_cast<float>(batteryConsumedMah)};
+                       static_cast<float>(batteryConsumedMah),
+                       static_cast<float>(batteryActiveSec)};
   p.putBytes("batt", &rec, sizeof(rec));
   p.end();
   lastSavedConsumedMah = static_cast<float>(batteryConsumedMah);
@@ -87,7 +93,7 @@ void saveBatteryEstimate() {
 
 void loadBatteryEstimate() {
   batteryConsumedMah = 0.0;
-  batteryAvgCurrentMa = kCurrentIdleMa;
+  batteryActiveSec = 0.0;
   lastBatteryTickMs = millis();
   lastBatterySaveMs = millis();
   lastSavedConsumedMah = 0.0f;
@@ -100,8 +106,11 @@ void loadBatteryEstimate() {
         rec.version == kBatteryNvsVersion) {
       float c = rec.consumedMah;
       if (c < 0.0f) c = 0.0f;
-      if (c > kBatteryCapacityMah) c = kBatteryCapacityMah;
+      if (c > batteryCapacityMah()) c = batteryCapacityMah();
+      float a = rec.activeSec;
+      if (a < 0.0f) a = 0.0f;
       batteryConsumedMah = c;
+      batteryActiveSec = a;
       lastSavedConsumedMah = c;
     }
   }
@@ -110,13 +119,12 @@ void loadBatteryEstimate() {
 
 void resetBatteryEstimate() {
   batteryConsumedMah = 0.0;
-  batteryAvgCurrentMa = kCurrentIdleMa;
+  batteryActiveSec = 0.0;
   lastBatteryTickMs = millis();
   saveBatteryEstimate();
 }
 
 void updateBatteryEstimate() {
-  if (kBatteryCapacityMah <= 0.0f) return;
   const uint32_t now = millis();
   const uint32_t dt = now - lastBatteryTickMs;
   lastBatteryTickMs = now;
@@ -126,12 +134,9 @@ void updateBatteryEstimate() {
   const float sag = batterySagFactor(static_cast<float>(batteryConsumedMah));
   const float drain = ma * sag;
   batteryConsumedMah += drain * (dt / 3600000.0);
-  if (batteryConsumedMah > kBatteryCapacityMah) {
-    batteryConsumedMah = kBatteryCapacityMah;
-  }
-
-  const float alpha = dt / (kCurrentAvgTauMs + dt);
-  batteryAvgCurrentMa += alpha * (drain - batteryAvgCurrentMa);
+  const float cap = batteryCapacityMah();
+  if (batteryConsumedMah > cap) batteryConsumedMah = cap;
+  batteryActiveSec += dt / 1000.0;
 
   if (now - lastBatterySaveMs >= kBatterySaveIntervalMs &&
       fabsf(static_cast<float>(batteryConsumedMah) - lastSavedConsumedMah) >=
@@ -141,19 +146,21 @@ void updateBatteryEstimate() {
 }
 
 String batteryEstimateString(int& pctOut) {
-  if (kBatteryCapacityMah <= 0.0f) {
-    pctOut = -1;
-    return String();
-  }
-  float remaining = kBatteryCapacityMah - static_cast<float>(batteryConsumedMah);
+  const float cap = batteryCapacityMah();
+  float remaining = cap - static_cast<float>(batteryConsumedMah);
   if (remaining < 0.0f) remaining = 0.0f;
-  int pct = static_cast<int>(remaining / kBatteryCapacityMah * 100.0f + 0.5f);
+  int pct = static_cast<int>(remaining / cap * 100.0f + 0.5f);
   pct = (pct + 5) / 10 * 10;
   if (pct > 100) pct = 100;
   pctOut = pct;
 
-  const float ma = batteryAvgCurrentMa > 1.0f ? batteryAvgCurrentMa : 1.0f;
-  int minsLeft = static_cast<int>(remaining / ma * 60.0f);
+  float avgMa = kCurrentIdleMa;
+  if (batteryActiveSec > 30.0 && batteryConsumedMah > 0.0) {
+    avgMa = static_cast<float>(batteryConsumedMah /
+                               (batteryActiveSec / 3600.0));
+  }
+  if (avgMa < 1.0f) avgMa = 1.0f;
+  int minsLeft = static_cast<int>(remaining / avgMa * 60.0f);
   if (minsLeft < 0) minsLeft = 0;
   minsLeft = (minsLeft + 7) / 15 * 15;
   if (minsLeft > 5999) minsLeft = 5999;

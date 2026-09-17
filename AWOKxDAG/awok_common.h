@@ -498,7 +498,8 @@ struct DeviceSettingsRecord {
   uint32_t backlightTimeoutMs;  // 0 = always on
   uint8_t brightnessPercent;    // 20–100
   uint8_t flags;                // kSetting*
-  uint8_t reserved[6];
+  uint16_t batteryCapacityMah;
+  uint8_t reserved[4];
 };
 static_assert(sizeof(DeviceSettingsRecord) == 20, "NVS settings layout changed");
 constexpr uint32_t kDeviceSettingsVersion = 1;

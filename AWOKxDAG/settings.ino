@@ -8,10 +8,15 @@ constexpr int kBacklightTimeoutOptionCount = static_cast<int>(
 const uint8_t kBrightnessOptions[] = {20, 40, 60, 80, 100};
 constexpr int kBrightnessOptionCount =
     static_cast<int>(sizeof(kBrightnessOptions) / sizeof(kBrightnessOptions[0]));
+const uint16_t kBatteryCapacityOptions[] = {500, 1000, 1500, 2000, 2500,
+                                            3000, 4000, 5000};
+constexpr int kBatteryCapacityOptionCount = static_cast<int>(
+    sizeof(kBatteryCapacityOptions) / sizeof(kBatteryCapacityOptions[0]));
+constexpr uint16_t kBatteryCapacityDefaultMah = 2000;
 constexpr int kSettingsRow0 = 48;
-constexpr int kSettingsRowH = 28;
-constexpr int kSettingsPitch = 30;
-constexpr int kSettingsRows = 7;
+constexpr int kSettingsRowH = 26;
+constexpr int kSettingsPitch = 28;
+constexpr int kSettingsRows = 8;
 char attackConfirmLabel[24] = {};
 uint32_t attackConfirmMs = 0;
 
@@ -72,6 +77,7 @@ void deviceSettingsDefaults(DeviceSettingsRecord& out) {
   out.gpsBaud = AwokPins::kGpsBaud;
   out.backlightTimeoutMs = 0;
   out.brightnessPercent = 100;
+  out.batteryCapacityMah = kBatteryCapacityDefaultMah;
 }
 
 void writeBacklightPercent(int percent) {
@@ -164,6 +170,11 @@ void loadDeviceSettings() {
   if (loaded.brightnessPercent < 20 || loaded.brightnessPercent > 100) {
     loaded.brightnessPercent = 100;
   }
+  bool capOk = false;
+  for (int i = 0; i < kBatteryCapacityOptionCount; ++i) {
+    if (kBatteryCapacityOptions[i] == loaded.batteryCapacityMah) capOk = true;
+  }
+  if (!capOk) loaded.batteryCapacityMah = kBatteryCapacityDefaultMah;
   deviceSettings = loaded;
   gpsRawEcho = settingFlag(kSettingNmeaEcho);
   Serial.printf("[settings] baud=%lu timeout=%lums brightness=%u%% flags=0x%02x\n",
@@ -204,6 +215,8 @@ String settingsRowLabel(int row) {
                                                  : "Active  Instant";
     case 5:
       return settingFlag(kSettingNmeaEcho) ? "NMEA  On" : "NMEA  Off";
+    case 6:
+      return "Batt  " + String(deviceSettings.batteryCapacityMah) + "mAh";
     default:
       return "Screen test";
   }
@@ -236,6 +249,20 @@ void cycleBrightness() {
       kBrightnessOptions[(index + 1) % kBrightnessOptionCount];
   noteActivity();
   setBacklightLit(true);
+  saveDeviceSettings();
+}
+
+void cycleBatteryCapacity() {
+  int index = 0;
+  for (int i = 0; i < kBatteryCapacityOptionCount; ++i) {
+    if (kBatteryCapacityOptions[i] == deviceSettings.batteryCapacityMah) {
+      index = i;
+      break;
+    }
+  }
+  deviceSettings.batteryCapacityMah =
+      kBatteryCapacityOptions[(index + 1) % kBatteryCapacityOptionCount];
+  resetBatteryEstimate();
   saveDeviceSettings();
 }
 
@@ -288,6 +315,10 @@ void handleSettingsTouch(int x, int y) {
       break;
     case 5:
       toggleSettingFlag(kSettingNmeaEcho);
+      drawSettings();
+      break;
+    case 6:
+      cycleBatteryCapacity();
       drawSettings();
       break;
     default:
