@@ -1,0 +1,381 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>AxD Remote</title>
+<style>
+  :root { color-scheme: dark; --bg:#0d1013; --panel:#161b22; --line:#263041;
+          --fg:#e6edf3; --muted:#8b98a5; --accent:#4aa3ff; --good:#3fb950;
+          --bad:#f85149; --warn:#d29922; }
+  * { box-sizing: border-box; }
+  body { margin:0; background:var(--bg); color:var(--fg);
+         font:15px/1.45 system-ui,-apple-system,Segoe UI,Roboto,sans-serif;
+         padding:16px; padding-bottom:40px; }
+  h1 { font-size:20px; margin:0 0 2px; letter-spacing:.5px; }
+  .sub { color:var(--muted); font-size:12px; margin-bottom:14px; }
+  .card { background:var(--panel); border:1px solid var(--line);
+          border-radius:12px; padding:14px; margin-bottom:14px; }
+  .row { display:flex; align-items:center; gap:10px; flex-wrap:wrap; }
+  .dot { width:10px; height:10px; border-radius:50%; background:var(--bad);
+         flex:0 0 auto; }
+  .dot.on { background:var(--good); }
+  button { font:600 15px system-ui; color:var(--fg); background:#1f2733;
+           border:1px solid var(--line); border-radius:10px; padding:12px 14px;
+           cursor:pointer; -webkit-tap-highlight-color:transparent; }
+  button:active { background:#2b3644; }
+  button.primary { background:var(--accent); border-color:var(--accent);
+                   color:#04121f; }
+  button.stop { background:#33191a; border-color:#5c2b2c; color:#ffb4ad; }
+  button:disabled { opacity:.4; }
+  .grid { display:grid; grid-template-columns:1fr 1fr; gap:10px; }
+  .status { font-variant-numeric:tabular-nums; }
+  .k { color:var(--muted); font-size:12px; }
+  .v { font-size:22px; font-weight:700; }
+  .stats { display:grid; grid-template-columns:1fr 1fr 1fr; gap:10px; text-align:center; }
+  #log { font:12px/1.4 ui-monospace,SFMono-Regular,Menlo,monospace;
+         white-space:pre-wrap; word-break:break-word; color:var(--muted);
+         max-height:170px; overflow:auto; }
+  .banner { background:#33191a; border:1px solid #5c2b2c; color:#ffb4ad;
+            border-radius:10px; padding:10px 12px; font-size:13px;
+            margin-bottom:14px; }
+  .net { display:flex; gap:8px; align-items:center; padding:8px 10px;
+         border:1px solid var(--line); border-radius:8px; margin-bottom:6px;
+         cursor:pointer; }
+  .net.sel { border-color:var(--accent); background:#12283f; }
+  .net .nm { flex:1; min-width:0; }
+  .net .ss { font-weight:600; overflow:hidden; text-overflow:ellipsis;
+             white-space:nowrap; }
+  .net .mb { color:var(--muted); font-size:11px;
+             font-variant-numeric:tabular-nums; }
+  .net .rs { color:var(--muted); font-size:12px; white-space:nowrap; }
+  .seg { display:flex; gap:0; border:1px solid var(--line); border-radius:10px; overflow:hidden; }
+  .seg button { flex:1; border:0; border-radius:0; background:var(--card);
+                color:var(--muted); font-weight:600; padding:12px; cursor:pointer; }
+  .seg button.on { background:var(--accent); color:#04121f; }
+  [hidden]{ display:none !important; }
+</style>
+</head>
+<body>
+  <h1>AxD&nbsp;Remote</h1>
+  <div class="sub">BLE control · orange bridge chip</div>
+
+  <div id="nobt" class="banner" hidden>
+    This browser has no Web Bluetooth. On iPhone use <b>Bluefy</b>; on Android/desktop
+    use <b>Chrome/Edge</b>. The page must be served over <b>https</b>.
+  </div>
+
+  <div class="card">
+    <div class="row">
+      <span id="dot" class="dot"></span>
+      <span id="state" class="status">Disconnected</span>
+      <span style="flex:1"></span>
+      <button id="connect" class="primary">Connect</button>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="k" style="margin-bottom:8px">Target chip — where commands run</div>
+    <div class="seg" id="target-seg">
+      <button data-target="1" class="on">Screen chip</button>
+      <button data-target="0">This bridge</button>
+    </div>
+    <div id="tgt-note" class="k" style="margin-top:8px" hidden>
+      Files/SD is screen-chip only on the bridge; wardrive streams its CSV to this phone (no SD needed).</div>
+  </div>
+
+  <div class="card">
+    <div class="stats">
+      <div><div class="k">Wi-Fi</div><div id="wifi" class="v">–</div></div>
+      <div><div class="k">BLE</div><div id="ble" class="v">–</div></div>
+      <div><div class="k">Tool</div><div id="tool" class="v" style="font-size:15px">–</div></div>
+    </div>
+    <div id="gps" class="k" style="margin-top:10px">GPS: –</div>
+  </div>
+
+  <div class="card">
+    <div class="row" style="margin-bottom:8px">
+      <span class="k" style="flex:1">Networks — tap a Wi-Fi Scan result to select</span>
+      <button data-op="1">Scan</button>
+      <button data-op="50">Refresh</button>
+    </div>
+    <div id="netlist"><div class="k">Run a Wi-Fi Scan to list networks.</div></div>
+    <div class="k" style="margin:10px 0 6px; color:var(--bad)">
+      Selected-target actions — authorized targets only</div>
+    <div class="grid" id="cmds-target">
+      <button data-op="52" class="stop">Deauth</button>
+      <button data-op="53" class="stop">Grab Handshake</button>
+      <button data-op="54">Track</button>
+      <button data-op="22" class="stop">Evil Twin</button>
+      <button data-op="23" class="stop">Probe Lure</button>
+    </div>
+  </div>
+
+  <div class="card">
+    <button data-op="255" class="stop" style="width:100%">Stop / Home</button>
+  </div>
+
+  <div class="card">
+    <div class="k" style="margin-bottom:8px">Recon</div>
+    <div class="grid" id="cmds-recon">
+      <button data-op="1">Wi-Fi Scan</button>
+      <button data-op="2">BLE Scan</button>
+      <button data-op="3">Channel Map</button>
+      <button data-op="4">Packet Monitor</button>
+      <button data-op="6">Clients</button>
+      <button data-op="10">WPS Scan</button>
+      <button data-op="11">Hidden SSID</button>
+      <button data-op="12">Cameras</button>
+      <button data-op="13">Security Audit</button>
+      <button data-op="14">BLE Trackers</button>
+      <button data-op="15">Harvester</button>
+      <button data-op="16">Probe Intel</button>
+      <button data-op="17">Saved</button>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="k" style="margin-bottom:8px">GPS &amp; wardrive</div>
+    <div class="grid" id="cmds-gps">
+      <button data-op="7">Wardrive Start</button>
+      <button data-op="8">Wardrive Stop</button>
+      <button data-op="9">GPS Status</button>
+      <button data-op="40">Locator</button>
+      <button data-op="41">Status</button>
+      <button data-op="42">Files</button>
+    </div>
+    <div class="row" style="margin-top:10px; align-items:center">
+      <span class="k" id="wd-count" style="flex:1">Wardrive: 0 rows</span>
+      <button id="wd-clear">Clear</button>
+      <button id="wd-save" class="primary">Download CSV</button>
+    </div>
+    <div class="k" style="margin-top:6px">On the bridge, wardrive rows (with GPS)
+      stream here — Download saves a WiGLE CSV to your phone.</div>
+  </div>
+
+  <div class="card">
+    <div class="k" style="margin-bottom:8px">Monitor</div>
+    <div class="grid" id="cmds-monitor">
+      <button data-op="5">Deauth Watch</button>
+      <button data-op="30">Rogue Watch</button>
+      <button data-op="31">BLE Spam Watch</button>
+      <button data-op="32">Karma Watch</button>
+      <button data-op="33">Beacon Watch</button>
+      <button data-op="34">Advanced Watch</button>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="k" style="margin-bottom:6px; color:var(--bad)">
+      Attacks — authorized targets only</div>
+    <div class="k" style="margin-bottom:8px">
+      Evil Twin / Probe Lure act on the network last selected on the device.</div>
+    <div class="grid" id="cmds-attack">
+      <button data-op="20" class="stop">Beacon Flood</button>
+      <button data-op="21" class="stop">Evil Portal</button>
+      <button data-op="22" class="stop">Evil Twin</button>
+      <button data-op="23" class="stop">Probe Lure</button>
+      <button data-op="24" class="stop">Auth Flood</button>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="k" style="margin-bottom:6px">Log</div>
+    <div id="log"></div>
+  </div>
+
+<script>
+"use strict";
+// Must match the bridge firmware GATT UUIDs (Gate 0 probe uses these too).
+const SVC     = "a0d10000-1234-4a3c-8b21-000000000001";
+const CMD     = "a0d10000-1234-4a3c-8b21-000000000002"; // write
+const STATUS  = "a0d10000-1234-4a3c-8b21-000000000003"; // notify/read
+const RESULTS = "a0d10000-1234-4a3c-8b21-000000000004"; // notify (Wi-Fi list)
+const OP_SELECT_WIFI = 51;
+const TARGET_OPS = [52,53,54,22,23];  // need a selected network
+const TGT_BRIDGE = 0, TGT_SCREEN = 1;
+let target = TGT_SCREEN;  // which chip runs the command
+const GPSSD_OPS = [42];  // Files -- screen-chip only (no SD on bridge)
+
+const $ = (id) => document.getElementById(id);
+const log = (m) => { const d=$("log"); d.textContent += (new Date().toLocaleTimeString()+"  "+m+"\n"); d.scrollTop=d.scrollHeight; };
+let device=null, cmdCh=null, statusCh=null, resultsCh=null;
+let nets=new Map(), selIndex=null;
+let wardriveRows=[];
+
+function setConnected(on){
+  $("dot").classList.toggle("on", on);
+  $("state").textContent = on ? "Connected" : "Disconnected";
+  $("connect").textContent = on ? "Disconnect" : "Connect";
+  document.querySelectorAll("button[data-op]").forEach(b => b.disabled = !on);
+  if (on) { refreshTargetButtons(); applyTargetGating(); }
+  if (!on){ nets.clear(); selIndex=null; renderNets(); }
+}
+
+function refreshTargetButtons(){
+  const ready = selIndex !== null;
+  TARGET_OPS.forEach(op => {
+    const b = document.querySelector('#cmds-target button[data-op="'+op+'"]');
+    if (b) b.disabled = !(device?.gatt?.connected) || !ready;
+  });
+}
+
+const AUTH = ["open","WEP","WPA","WPA2","WPA2E","WPA3","WPA2/3","WAPI","OWE"];
+function parseResult(dv){
+  if (dv.byteLength >= 1 && dv.getUint8(0) === 2) {  // wardrive WiGLE CSV row (text)
+    let row = "";
+    for (let k = 1; k < dv.byteLength; k++) row += String.fromCharCode(dv.getUint8(k));
+    wardriveRows.push(row);
+    $("wd-count").textContent = "Wardrive: " + wardriveRows.length + " rows";
+    return;
+  }
+  if (dv.byteLength < 12) return;            // [source][index][count][rssi][ch][auth][bssid6][ssid]
+  const i = dv.getUint8(1), count = dv.getUint8(2);
+  const rssi = dv.getInt8(3), ch = dv.getUint8(4), auth = dv.getUint8(5);
+  let mac=[]; for (let k=0;k<6;k++) mac.push(dv.getUint8(6+k).toString(16).padStart(2,"0"));
+  let ssid=""; for (let k=12;k<dv.byteLength;k++) ssid += String.fromCharCode(dv.getUint8(k));
+  nets.set(i, {i, count, rssi, ch, auth, bssid:mac.join(":"), ssid});
+  renderNets();
+}
+
+function renderNets(){
+  const box = $("netlist");
+  if (nets.size === 0){ box.innerHTML = '<div class="k">Run a Wi-Fi Scan to list networks.</div>'; return; }
+  const rows = [...nets.values()].sort((a,b)=>a.i-b.i);
+  box.innerHTML = "";
+  for (const n of rows){
+    const el = document.createElement("div");
+    el.className = "net" + (n.i===selIndex ? " sel" : "");
+    el.innerHTML = '<div class="nm"><div class="ss">'+(n.ssid||"&lt;hidden&gt;")+
+      '</div><div class="mb">'+n.bssid+'  ch'+n.ch+'  '+(AUTH[n.auth]||n.auth)+'</div></div>'+
+      '<div class="rs">'+n.rssi+' dBm</div>';
+    el.addEventListener("click", () => selectNet(n.i));
+    box.appendChild(el);
+  }
+}
+
+function selectNet(i){
+  selIndex = i;
+  sendOp(OP_SELECT_WIFI, i);
+  renderNets();
+  refreshTargetButtons();
+}
+
+setConnected(false);
+
+if (!navigator.bluetooth) $("nobt").hidden = false;
+
+function parseStatus(dv){
+  // Tagged status blob: [source:u8][wifi:u32][ble:u32][toolId:u8]. The initial
+  // characteristic value is the text "ready" (no numbers) -- ignore that.
+  try {
+    if (dv.byteLength >= 10){
+      $("wifi").textContent = dv.getUint32(1, true);
+      $("ble").textContent  = dv.getUint32(5, true);
+      $("tool").textContent = "#"+dv.getUint8(9);
+    }
+    if (dv.byteLength >= 20){  // GPS tail from the bridge: fix,sats,lat,lon
+      const fix = dv.getUint8(10), sats = dv.getUint8(11);
+      const lat = dv.getFloat32(12, true), lon = dv.getFloat32(16, true);
+      $("gps").textContent = fix
+        ? "GPS: FIX · " + sats + " sats · " + lat.toFixed(5) + ", " + lon.toFixed(5)
+        : "GPS: no fix · " + sats + " sats";
+    }
+  } catch(e){ /* leave prior values */ }
+}
+
+async function connect(){
+  if (!navigator.bluetooth){ log("no Web Bluetooth in this browser"); return; }
+  try {
+    log("requesting device…");
+    device = await navigator.bluetooth.requestDevice({
+      filters:[{ services:[SVC] }, { namePrefix:"AxD" }],
+      optionalServices:[SVC]
+    });
+    device.addEventListener("gattserverdisconnected", onDisc);
+    log("connecting to "+(device.name||"device")+"…");
+    const server = await device.gatt.connect();
+    const svc = await server.getPrimaryService(SVC);
+    cmdCh = await svc.getCharacteristic(CMD);
+    statusCh = await svc.getCharacteristic(STATUS);
+    statusCh.addEventListener("characteristicvaluechanged", e => parseStatus(e.target.value));
+    await statusCh.startNotifications();
+    try { parseStatus(await statusCh.readValue()); } catch(e){}
+    try {
+      resultsCh = await svc.getCharacteristic(RESULTS);
+      resultsCh.addEventListener("characteristicvaluechanged", e => parseResult(e.target.value));
+      await resultsCh.startNotifications();
+    } catch(e){ log("no results characteristic (old bridge?)"); }
+    setConnected(true);
+    log("connected.");
+  } catch(e){ log("connect failed: "+e.message); }
+}
+
+function onDisc(){ setConnected(false); log("disconnected."); }
+
+async function disconnect(){ if (device?.gatt?.connected) device.gatt.disconnect(); }
+
+async function sendOp(op, arg=0){
+  if (!cmdCh){ log("not connected"); return; }
+  try { await cmdCh.writeValue(new Uint8Array([op, arg, target]));
+        log("sent op "+op+(arg?(" arg "+arg):"")+" -> "+(target===TGT_BRIDGE?"bridge":"screen")); }
+  catch(e){ log("send failed: "+e.message); }
+}
+
+function applyTargetGating(){
+  const bridge = target === TGT_BRIDGE;
+  $("tgt-note").hidden = !bridge;
+  GPSSD_OPS.forEach(op => {
+    document.querySelectorAll('button[data-op="'+op+'"]').forEach(b => {
+      b.dataset.gps = "1";
+      b.disabled = !(device?.gatt?.connected) || (bridge);
+    });
+  });
+}
+document.querySelectorAll('#target-seg button').forEach(b =>
+  b.addEventListener("click", () => {
+    target = Number(b.dataset.target);
+    document.querySelectorAll('#target-seg button').forEach(x =>
+      x.classList.toggle("on", x === b));
+    nets.clear(); selIndex = null; renderNets();  // lists are per-chip
+    applyTargetGating();
+    log("target = " + (target===TGT_BRIDGE ? "this bridge" : "screen chip"));
+  }));
+
+async function downloadWardriveCsv(){
+  if (!wardriveRows.length){ log("no wardrive rows yet"); return; }
+  const header =
+    "WigleWifi_1.4,appRelease=AxD,model=ESP32-C5,release=1.4.3,device=AxD,display=none,board=Dual C5 Bridge,brand=AxD\n" +
+    "MAC,SSID,AuthMode,FirstSeen,Channel,RSSI,CurrentLatitude,CurrentLongitude,AltitudeMeters,AccuracyMeters,Type\n";
+  const text = header + wardriveRows.join("\n") + "\n";
+  const fname = "wardrive-" + Date.now() + ".csv";
+  // iOS/Bluefy ignore <a download>; the Web Share API with a File opens the
+  // share sheet -> "Save to Files". Fall back to an anchor on Android/desktop.
+  try {
+    const file = new File([text], fname, { type: "text/csv" });
+    if (navigator.canShare && navigator.canShare({ files: [file] })) {
+      await navigator.share({ files: [file], title: fname });
+      log("shared " + wardriveRows.length + " rows (Save to Files)");
+      return;
+    }
+  } catch (e) {
+    if (e && e.name === "AbortError") { log("save cancelled"); return; }
+    // otherwise fall through to the anchor method
+  }
+  const url = URL.createObjectURL(new Blob([text], { type: "text/csv" }));
+  const a = document.createElement("a");
+  a.href = url; a.download = fname; a.target = "_blank"; a.rel = "noopener";
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 4000);
+  log("downloaded " + wardriveRows.length + " rows");
+}
+$("wd-save").addEventListener("click", downloadWardriveCsv);
+$("wd-clear").addEventListener("click", () => {
+  wardriveRows = []; $("wd-count").textContent = "Wardrive: 0 rows"; log("wardrive rows cleared");
+});
+$("connect").addEventListener("click", () => (device?.gatt?.connected ? disconnect() : connect()));
+document.querySelectorAll("button[data-op]").forEach(b =>
+  b.addEventListener("click", () => sendOp(Number(b.dataset.op))));
+</script>
+</body>
+</html>

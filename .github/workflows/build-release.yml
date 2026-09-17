@@ -1,0 +1,196 @@
+name: Build & Release
+
+# Manually triggered from the Actions tab. Set the release version there.
+on:
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Release version (e.g. 1.0.0)"
+        required: true
+        default: "1.4.4"
+      prerelease:
+        description: "Mark as pre-release?"
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - variant: touch
+            define: AWOK_DUAL_C5_TOUCH
+            label: "Dual C5 Touch"
+            fqbn: "esp32:esp32:esp32c5:FlashSize=8M,PartitionScheme=default_8MB,PSRAM=enabled"
+          - variant: mini
+            define: AWOK_DUAL_C5_MINI
+            label: "Dual C5 Mini"
+            fqbn: "esp32:esp32:esp32c5:FlashSize=8M,PartitionScheme=default_8MB,PSRAM=enabled"
+          - variant: esp32-touch-v1
+            define: AWOK_DUAL_ESP32_TOUCH_V1
+            label: "Dual ESP32 Touch v1"
+            fqbn: "esp32:esp32:esp32:FlashSize=4M,PartitionScheme=huge_app,PSRAM=disabled"
+          - variant: esp32-touch-v2
+            define: AWOK_DUAL_ESP32_TOUCH_V2
+            label: "Dual ESP32 Touch v2"
+            fqbn: "esp32:esp32:esp32:FlashSize=4M,PartitionScheme=huge_app,PSRAM=disabled"
+          - variant: esp32-touch-v3
+            define: AWOK_DUAL_ESP32_TOUCH_V3
+            label: "Dual ESP32 Touch v3"
+            fqbn: "esp32:esp32:esp32:FlashSize=4M,PartitionScheme=huge_app,PSRAM=disabled"
+          - variant: esp32-mini-v1
+            define: AWOK_DUAL_ESP32_MINI_V1
+            label: "Dual ESP32 Mini v1"
+            fqbn: "esp32:esp32:esp32:FlashSize=4M,PartitionScheme=huge_app,PSRAM=disabled"
+          - variant: esp32-mini-v2
+            define: AWOK_DUAL_ESP32_MINI_V2
+            label: "Dual ESP32 Mini v2"
+            fqbn: "esp32:esp32:esp32:FlashSize=4M,PartitionScheme=huge_app,PSRAM=disabled"
+          - variant: esp32-mini-v3
+            define: AWOK_DUAL_ESP32_MINI_V3
+            label: "Dual ESP32 Mini v3"
+            fqbn: "esp32:esp32:esp32:FlashSize=4M,PartitionScheme=huge_app,PSRAM=disabled"
+          - variant: bridge
+            label: "Dual C5 Bridge (headless BLE<->ESP-NOW)"
+            board: dual-c5-bridge
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install arduino-cli
+        uses: arduino/setup-arduino-cli@v2
+
+      - name: Install ESP32 core
+        run: |
+          arduino-cli config init
+          arduino-cli config add board_manager.additional_urls \
+            https://espressif.github.io/arduino-esp32/package_esp32_index.json
+          arduino-cli core update-index
+          arduino-cli core install esp32:esp32@3.3.10
+
+      - name: Install libraries
+        run: |
+          arduino-cli lib install \
+            "Adafruit GFX Library" \
+            "Adafruit ILI9341" \
+            "Adafruit ST7735 and ST7789 Library" \
+            "Adafruit BusIO" \
+            "NimBLE-Arduino" \
+            "XPT2046_Touchscreen" \
+            "TinyGPSPlus"
+
+      - name: Compile ${{ matrix.label }} (produces the merged image)
+        if: ${{ !matrix.board }}
+        # -z muldefs lets our ieee80211_raw_frame_sanity_check override win over
+        # the one in libnet80211.a (a stock core has this empty; enabling raw
+        # deauth injection). --wrap=esp_wifi_init trims STA RX/TX buffers +
+        # CSI/AMPDU; --wrap=esp_bt_controller_init trims the BLE controller's
+        # duplicate lists. -D${{ matrix.define }} selects the board profile
+        # (pins, display, radio memory policy) independent of the sketch's
+        # Arduino IDE default.
+        # AWOKxDAG is BLE Observer-only (scan; no client/server/adv anywhere in
+        # the sketch), so the CONFIG_BT_NIMBLE_ROLE_*_DISABLED flags trim
+        # NimBLE-Arduino's default Central/Peripheral/Broadcaster footprint.
+        # The actual fix for BLE scan failing with HCI "Memory Capacity
+        # Exceeded" (NimBLE rc=519) on the C5 is the time-multiplex
+        # RadioScheduler (only one radio DMA-resident at a time) -- the C5's
+        # ~70 KB DMA pool cannot hold Wi-Fi + the BLE controller together.
+        # (NimBLE buffer-count and MEM_ALLOC_MODE macros are NOT overridable by
+        # -D here: the core's generated sdkconfig.h #defines them
+        # unconditionally and silently wins.)
+        # build.code_debug=1 is Error-level CORE_DEBUG_LEVEL: silent unless
+        # something is wrong, but it's what surfaces NimBLE's own error rc
+        # codes, which are compiled out entirely at the default level 0.
+        run: |
+          arduino-cli compile \
+            --fqbn "${{ matrix.fqbn }}" \
+            --build-property "compiler.c.elf.extra_flags=-Wl,-z,muldefs -Wl,--wrap=esp_wifi_init -Wl,--wrap=esp_bt_controller_init" \
+            --build-property "compiler.cpp.extra_flags=-D${{ matrix.define }} -DCONFIG_BT_NIMBLE_ROLE_CENTRAL_DISABLED -DCONFIG_BT_NIMBLE_ROLE_PERIPHERAL_DISABLED -DCONFIG_BT_NIMBLE_ROLE_BROADCASTER_DISABLED" \
+            --build-property "build.code_debug=1" \
+            --build-path "build-${{ matrix.variant }}" \
+            AWOKxDAG/AWOKxDAG.ino
+
+      - name: Compile ${{ matrix.label }} (bridge; separate sketch)
+        if: ${{ matrix.board }}
+        # The headless bridge is a different sketch with its own flags (NimBLE
+        # Peripheral role on, no linker wraps, shared header include);
+        # build_firmware.py already encodes all of that.
+        run: python3 scripts/build_firmware.py ${{ matrix.board }}
+
+      - name: Stage ${{ matrix.label }} artifacts
+        if: ${{ !matrix.board }}
+        run: |
+          mkdir -p release
+          b="build-${{ matrix.variant }}"
+          v="${{ matrix.variant }}"
+          cp "$b/AWOKxDAG.ino.merged.bin"     "release/awokxdag-$v-merged.bin"
+          cp "$b/AWOKxDAG.ino.bin"            "release/awokxdag-$v-app.bin"
+          cp "$b/AWOKxDAG.ino.bootloader.bin" "release/awokxdag-$v-bootloader.bin"
+          cp "$b/AWOKxDAG.ino.partitions.bin" "release/awokxdag-$v-partitions.bin"
+          cp "$b/boot_app0.bin"               "release/awokxdag-$v-boot_app0.bin"
+          ls -la release
+
+      - name: Stage ${{ matrix.label }} artifacts (bridge)
+        if: ${{ matrix.board }}
+        run: |
+          mkdir -p release
+          v="${{ matrix.variant }}"
+          d=$(ls -d build/${{ matrix.board }}-*/ | head -1)
+          for s in merged app bootloader partitions boot_app0; do
+            cp "$d"/awokxdag-*-${{ matrix.board }}-$s.bin "release/awokxdag-$v-$s.bin"
+          done
+          ls -la release
+
+      - name: Upload ${{ matrix.label }} artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-${{ matrix.variant }}
+          path: release/
+          if-no-files-found: error
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download build artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: release
+          pattern: release-*
+          merge-multiple: true
+
+      - name: Checksums
+        run: |
+          cd release
+          sha256sum * > SHA256SUMS
+          ls -la
+
+      - name: Create GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ inputs.version }}
+          name: AWOKxDAG v${{ inputs.version }}
+          prerelease: ${{ inputs.prerelease }}
+          body: |
+            AWOKxDAG v${{ inputs.version }} — ESP32-C5 and original ESP32 firmware.
+
+            - **Dual C5 Touch / Mini** — prefixes `awokxdag-touch-…` / `awokxdag-mini-…`
+            - **Original Dual ESP32 Touch v1/v2/v3** (experimental) — `awokxdag-esp32-touch-v<revision>-…`
+            - **Original Dual ESP32 Mini v1/v2/v3** (experimental) — `awokxdag-esp32-mini-v<revision>-…`
+
+            Original ESP32 builds support 2.4 GHz only, 32-entry result tables,
+            and separate Wi-Fi/BLE operation. See the board port documentation
+            for physical validation status. C5 Mini retains PSRAM-backed tables
+            and memory-checked dual-radio operation.
+
+            Write your board's merged image at `0x0`. Select `--chip esp32` for
+            original boards or `--chip esp32c5` for C5. For component images,
+            bootloader offsets are `0x1000` (ESP32) / `0x2000` (C5); partitions
+            `0x8000`, boot_app0 `0xe000`, app `0x10000`. Verify SHA256SUMS and keep
+            a backup before installing.
+          files: release/*

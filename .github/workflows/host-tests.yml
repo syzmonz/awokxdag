@@ -1,0 +1,23 @@
+name: Host tests
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'AWOKxDAG/network_parse.h'
+      - 'tests/host/**'
+      - '.github/workflows/host-tests.yml'
+  pull_request:
+    paths:
+      - 'AWOKxDAG/network_parse.h'
+      - 'tests/host/**'
+      - '.github/workflows/host-tests.yml'
+  workflow_dispatch:
+
+jobs:
+  parse:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Parser tests (ASan/UBSan)
+        run: bash tests/host/run.sh

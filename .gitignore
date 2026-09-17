@@ -1,0 +1,6 @@
+/device-backups/
+/build/
+.DS_Store
+website/node_modules/
+website/dist/
+tests/host/test_network_parse
