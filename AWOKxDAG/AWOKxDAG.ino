@@ -817,7 +817,18 @@ void drawHome() {
 #ifdef AWOK_MINI_DISPLAY
   display.button(128, 284, 106, 30, "About", kAccent);
 #else
-  drawFooter(kVersion, "About >");
+  display.fillRect(0, kFooterTop, kScreenWidth, kScreenHeight - kFooterTop,
+                   kBackground);
+  display.drawRoundRect(6, 284, 106, 30, 6, kMuted);
+  display.setTextSize(1);
+  display.setTextColor(ILI9341_WHITE, kBackground);
+  int16_t vbx, vby;
+  uint16_t vbw, vbh;
+  display.getTextBounds(kVersion, 0, 0, &vbx, &vby, &vbw, &vbh);
+  display.setCursor(6 + (106 - static_cast<int>(vbw)) / 2,
+                    284 + (30 - static_cast<int>(vbh)) / 2);
+  display.print(kVersion);
+  drawButton(128, 284, 106, 30, "About >", kAccent);
 #endif
 }
 

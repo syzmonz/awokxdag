@@ -29,9 +29,9 @@ enum SettingItem : uint8_t {
   kItemSleep, kItemScreenTest, kItemCapacity, kItemTune
 };
 const uint8_t kSettingsPage0[] = {kItemBright, kItemGps, kItemSplash,
-                                 kItemActive, kItemNmea};
-const uint8_t kSettingsPage1[] = {kItemSleep, kItemScreenTest,
-                                 kItemCapacity, kItemTune};
+                                 kItemActive, kItemNmea, kItemCapacity,
+                                 kItemTune};
+const uint8_t kSettingsPage1[] = {kItemSleep, kItemScreenTest};
 constexpr int kSettingsPage0Count =
     static_cast<int>(sizeof(kSettingsPage0) / sizeof(kSettingsPage0[0]));
 constexpr int kSettingsPage1Count =
