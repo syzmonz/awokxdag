@@ -110,7 +110,7 @@ constexpr uint8_t kDeauthHopChannels[] = {
 constexpr int kDeauthHopChannelCount =
     static_cast<int>(sizeof(kDeauthHopChannels) / sizeof(kDeauthHopChannels[0]));
 constexpr int kMaxDeauthTargets = 8;
-constexpr char kVersion[] = "1.5.0-syz.2";
+constexpr char kVersion[] = "1.5.0-syz.3";
 constexpr char kAuthor[] = "dag nazty";
 constexpr uint32_t kHandshakeRedrawMs = 500;
 constexpr uint32_t kHandshakePulseMs = 2000;
@@ -386,6 +386,26 @@ enum LinkPlan : uint8_t {
 struct LinkQueueItem {
   LinkPacket pkt;
   int8_t rssi = -127;
+};
+
+// ---- Fleet Wardrive runtime state --------------------------------------
+constexpr uint32_t kFleetInviteIntervalMs = 400;   // coordinator invite cadence
+constexpr uint32_t kFleetRosterIntervalMs = 1000;  // coordinator roster cadence
+constexpr uint32_t kFleetMemberTimeoutMs = 6000;   // drop a silent member
+// Per-worker outbound row ring. Each slot is a full FleetWardriveRow (~76 B) and
+// there are two of these rings, so on the RAM-tight classic ESP32 (single-band)
+// keep it small; the dual-band C5 has the headroom for a deeper buffer.
+constexpr int kFleetRowRingSlots = AwokPins::kDualBand ? 96 : 24;
+
+// One fleet member as tracked by the coordinator (and mirrored on every node
+// from the roster). `mac`/`caps` come from the roster; the rest are live.
+struct FleetMember {
+  uint8_t mac[6] = {0};
+  uint8_t caps = 0;
+  uint32_t lastSeenMs = 0;  // coordinator: last FleetJoin/row heard
+  uint32_t rows = 0;        // rows contributed (coordinator view)
+  uint32_t ackSeq = 0;      // highest row seq stored from this member
+  uint8_t battery = 0;
 };
 
 // A suspected surveillance camera found by the camera scan.

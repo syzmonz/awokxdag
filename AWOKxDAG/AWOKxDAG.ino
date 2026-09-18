@@ -6,10 +6,10 @@
     !defined(AWOK_DUAL_ESP32_MINI_V1) && !defined(AWOK_DUAL_ESP32_MINI_V2) && \
     !defined(AWOK_DUAL_ESP32_MINI_V3)
 //#define AWOK_DUAL_C5_TOUCH
-//#define AWOK_DUAL_C5_MINI
+#define AWOK_DUAL_C5_MINI
 //#define AWOK_DUAL_ESP32_TOUCH_V1
 //#define AWOK_DUAL_ESP32_TOUCH_V2
-#define AWOK_DUAL_ESP32_TOUCH_V3
+//#define AWOK_DUAL_ESP32_TOUCH_V3
 //#define AWOK_DUAL_ESP32_MINI_V1
 //#define AWOK_DUAL_ESP32_MINI_V2
 //#define AWOK_DUAL_ESP32_MINI_V3
@@ -211,6 +211,7 @@ uint32_t wardriveScans = 0;
 uint32_t wardriveStartMs = 0;
 uint32_t lastWardriveDrawMs = 0;
 bool wardriveCsvReady = false;
+String g_wardriveCsvPath;  // this run's CSV file (a new one is made each start)
 uint8_t wardriveMacs[kMaxWardriveMacs][6];
 int wardriveMacCount = 0;
 uint32_t wardriveBleCount = 0;
@@ -247,6 +248,31 @@ uint32_t lastLinkSyncMs = 0;
 uint32_t lastLinkTelemMs = 0;
 uint32_t lastLinkWardriveDrawMs = 0;
 bool linkWindowScanStopped = false;  // aborted the async scan for this window
+
+// ---- Fleet Wardrive globals --------------------------------------------
+bool fleetActive = false;          // in a fleet session (supersedes 1:1 pair)
+bool fleetListening = false;       // armed to auto-join a fleet invite
+bool fleetCoordinator = false;     // this node coordinates + aggregates
+uint8_t fleetCoordinatorMac[6] = {0}; // authority pinned by explicit Start/Join
+uint32_t fleetSessionId = 0;
+uint16_t fleetCode = 0;            // short join code
+FleetMember fleetMembers[kFleetMaxNodes];
+int fleetMemberCount = 0;
+int fleetMyIndex = 0;              // my slot in the roster
+int fleetCoordIndex = 0;
+int fleetBleNodeIndex = -1;        // roster index that scans BLE (-1 = none)
+int fleetSinkIndex = -1;          // roster index that owns the SD CSV (-1 = none)
+uint32_t fleetRowSeq = 0;         // my outbound row sequence (worker)
+uint32_t fleetAckedSeq = 0;       // coordinator ack of my rows (worker)
+bool fleetWardriveOn = false;     // coordinator intent: fleet wardrive running
+bool fleetBleScanRunning = false; // this node is the fleet's BLE scanner
+bool fleetMenuOpen = false;       // Link screen is showing the fleet menu
+uint32_t lastFleetInviteMs = 0;
+uint32_t lastFleetRosterMs = 0;
+// Roster handed from the ESP-NOW recv callback to updateLink (larger than a
+// LinkPacket, so it rides its own single-slot mailbox instead of the ring).
+volatile bool fleetRosterPending = false;
+FleetRoster fleetPendingRoster;
 LinkQueueItem linkPacketQueue[kLinkPacketQueueSlots];
 volatile int linkPacketHead = 0;
 volatile int linkPacketTail = 0;

@@ -443,6 +443,42 @@ void handleTouch() {
     return;
   }
   if (currentView == View::kLinkWardrive) {
+    // Fleet screens render over the Link view and take touch first.
+    if (fleetActive || fleetListening) {
+      const bool joining = fleetListening && !fleetActive;
+      if (fleetCoordinator && !joining) {  // Home / Leave / Go|Stop
+        if (x < 80) {
+          drawHome();  // fleet keeps running in the background
+        } else if (x < 160) {
+          fleetLeave();
+          drawLinkWardrive();
+        } else {
+          if (fleetWardriveOn) fleetStopWardrive(); else fleetStartWardrive();
+          drawLinkWardrive();
+        }
+      } else {  // member / joining: Leave / Home
+        if (x < kScreenWidth / 2) {
+          fleetLeave();
+          drawLinkWardrive();
+        } else {
+          drawHome();
+        }
+      }
+      return;
+    }
+    if (fleetMenuOpen) {  // Back / Start / Join
+      if (x < 80) {
+        fleetMenuOpen = false;
+        drawLinkWardrive();
+      } else if (x < 160) {
+        fleetStartWardrive();
+        drawLinkWardrive();
+      } else {
+        fleetArm();
+        drawLinkWardrive();
+      }
+      return;
+    }
     if (linkWardriveActive) {
       stopLinkWardrive();
       if (x < kScreenWidth / 2) {
@@ -475,7 +511,8 @@ void handleTouch() {
       if (x < 80) {
         drawGps();
       } else if (x < 160) {
-        linkStartDiscovery();
+        fleetMenuOpen = true;   // Fleet supersedes the legacy 1:1 pair flow
+        drawLinkWardrive();
       } else {
         startLinkWardrive();
       }
@@ -737,6 +774,8 @@ void handleSerial() {
     Serial.printf("\n[gps] raw echo %s\n", gpsRawEcho ? "ON" : "OFF");
     if (currentView == View::kSettings) drawSettings();
   }
+  if (command == 'f') fleetStartWardrive();
+  if (command == 'j') fleetArm();
   if (command == 'w') startWifiScanContinuous();
   if (command == 'c') {
     if (wifiCount) {

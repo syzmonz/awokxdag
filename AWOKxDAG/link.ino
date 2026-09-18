@@ -18,24 +18,76 @@ static uint8_t linkScanChannel = 0;
 
 // ---- ESP-NOW plumbing ---------------------------------------------------
 
+// Copy a LinkPacket-sized control frame into the ring for the main loop.
+static void linkQueuePacket(const esp_now_recv_info_t* info, const uint8_t* data) {
+  const int next = (linkPacketHead + 1) % kLinkPacketQueueSlots;
+  if (next == linkPacketTail) return;  // queue full: drop
+  LinkQueueItem& item = linkPacketQueue[linkPacketHead];
+  memcpy(&item.pkt, data, sizeof(LinkPacket));
+  item.rssi = (info && info->rx_ctrl) ? info->rx_ctrl->rssi : -127;
+  if (info && info->src_addr) memcpy(item.pkt.srcMac, info->src_addr, 6);
+  linkPacketHead = next;
+}
+
 void onLinkRecv(const esp_now_recv_info_t* info, const uint8_t* data, int len) {
-#ifdef AWOK_HEADLESS
-  // On the bridge, ESP-NOW frames from the white screen chip are its telemetry
-  // and Wi-Fi results (in response to relayed commands) -- forward them to the
-  // phone tagged as the screen chip. The bridge is never itself commanded over
-  // ESP-NOW, so nothing here is queued as a command.
   if (len < 6) return;
   uint32_t magic;
   memcpy(&magic, data, 4);
   if (magic != kLinkMagic) return;
   const uint8_t type = data[5];
+
+  // Fleet roster is larger than a LinkPacket: hand it to updateLink via a
+  // single-slot mailbox. Filter before writing the slot so a foreign fleet
+  // cannot overwrite the pinned coordinator's next valid roster.
+  if (type == kLinkMsgFleetRoster && len == static_cast<int>(sizeof(FleetRoster))) {
+    FleetRoster candidate;
+    memcpy(&candidate, data, sizeof(candidate));
+    if (!fleetActive || fleetCoordinator) return;
+    if (candidate.sessionId != fleetSessionId || candidate.memberCount == 0 ||
+        candidate.memberCount > kFleetMaxNodes ||
+        candidate.coordIndex >= candidate.memberCount)
+      return;
+    if (memcmp(candidate.members[candidate.coordIndex].mac,
+               fleetCoordinatorMac, 6) != 0)
+      return;
+    memcpy(&fleetPendingRoster, &candidate, sizeof(candidate));
+    fleetRosterPending = true;
+    return;
+  }
+  // Fleet wardrive rows (workers -> coordinator) and their ACKs.
+  if (type == kLinkMsgFleetWardriveRow &&
+      len == static_cast<int>(sizeof(FleetWardriveRow))) {
+    fleetOnRowFrame(data);
+    return;
+  }
+  if (type == kLinkMsgFleetAck && len == static_cast<int>(sizeof(FleetAck))) {
+    fleetOnAckFrame(data);
+    return;
+  }
+
+#ifdef AWOK_HEADLESS
+  // Bridge phone-relay role: forward a screen chip's telem/results to the phone.
   if (type == kLinkMsgTelem && len == static_cast<int>(sizeof(LinkPacket))) {
     LinkPacket p;
     memcpy(&p, data, sizeof(p));
-    uint8_t blob[9];
+    // Match the bridge's own 24-byte status body so the web UI can maintain
+    // independent, complete status for both command targets.
+    uint8_t blob[24] = {0};
     memcpy(blob + 0, &p.networks, 4);
     memcpy(blob + 4, &p.bleCount, 4);
     blob[8] = p.channel;
+    if (p.flags & kLinkTelemStatus) {
+      blob[9] = (p.flags & kLinkTelemGpsFix) ? 1 : 0;
+      blob[10] = static_cast<uint8_t>(p.reserved >> 8);
+      memcpy(blob + 11, &p.sessionId, 4);    // latitude float bits
+      memcpy(blob + 15, &p.masterMillis, 4); // longitude float bits
+      blob[19] = (p.flags & kLinkTelemFleetActive) ? 1 : 0;
+      blob[20] = static_cast<uint8_t>(p.reserved & 0xFF);
+      memcpy(blob + 21, &p.code, 2);
+      blob[23] = ((p.flags & kLinkTelemFleetCoordinator) ? 0x01 : 0) |
+                 ((p.flags & kLinkTelemFleetListening) ? 0x02 : 0) |
+                 ((p.flags & kLinkTelemFleetRunning) ? 0x04 : 0);
+    }
     bridgeNotifyStatus(kSourceScreen, blob, sizeof(blob));
   } else if (type == kLinkMsgWifiResult &&
              len == static_cast<int>(sizeof(AxdWifiResult))) {
@@ -48,18 +100,12 @@ void onLinkRecv(const esp_now_recv_info_t* info, const uint8_t* data, int len) {
     size_t sl = strnlen(r.ssid, 32);
     memcpy(blob + 11, r.ssid, sl);
     bridgeNotifyResult(kSourceScreen, blob, 11 + sl);
+    return;
   }
-  return;
-#else
-  if (len != static_cast<int>(sizeof(LinkPacket))) return;
-  const int next = (linkPacketHead + 1) % kLinkPacketQueueSlots;
-  if (next == linkPacketTail) return;  // queue full: drop
-  LinkQueueItem& item = linkPacketQueue[linkPacketHead];
-  memcpy(&item.pkt, data, sizeof(LinkPacket));
-  item.rssi = (info && info->rx_ctrl) ? info->rx_ctrl->rssi : -127;
-  if (info && info->src_addr) memcpy(item.pkt.srcMac, info->src_addr, 6);
-  linkPacketHead = next;
 #endif
+  // Link/fleet control frames (Hello, Sync, Telem, Command, FleetInvite,
+  // FleetJoin) are LinkPacket-sized: queue for linkHandlePacket on the loop.
+  if (len == static_cast<int>(sizeof(LinkPacket))) linkQueuePacket(info, data);
 }
 
 bool linkEnsureEspNow() {
@@ -92,6 +138,448 @@ bool linkEnsureEspNow() {
                 linkSelfMac[4], linkSelfMac[5]);
   return true;
 }
+
+// ---- Fleet Wardrive: N linked nodes split the plan into one CSV ----------
+// Coordinator inbox for peer rows (POD; filled in the ESP-NOW callback, drained
+// by the aggregator in updateLink). Ack lets a worker retransmit only new rows.
+static FleetWardriveRow fleetRowRing[kFleetRowRingSlots];
+static volatile int fleetRowHead = 0;
+static int fleetRowTail = 0;
+
+void fleetOnRowFrame(const uint8_t* data) {
+  const int next = (fleetRowHead + 1) % kFleetRowRingSlots;
+  if (next == fleetRowTail) return;  // full: drop (worker retransmits)
+  memcpy(&fleetRowRing[fleetRowHead], data, sizeof(FleetWardriveRow));
+  fleetRowHead = next;
+}
+
+void fleetOnAckFrame(const uint8_t* data) {
+  FleetAck a;
+  memcpy(&a, data, sizeof(a));
+  if (a.sessionId != fleetSessionId) return;
+  if (memcmp(a.targetMac, linkSelfMac, 6) != 0) return;
+  if (a.seq > fleetAckedSeq) fleetAckedSeq = a.seq;
+}
+
+uint8_t fleetLocalCaps() {
+  uint8_t c = kFleetCapBle;  // every C5 can scan BLE
+  if (AwokPins::kDualBand) c |= kFleetCapDualBand;
+  c |= kFleetCapGps;         // GPS is wired on the C5 boards
+  if (sdReady) c |= kFleetCapSd;
+  return c;
+}
+
+int fleetIndexOfMac(const uint8_t* mac) {
+  for (int i = 0; i < fleetMemberCount; ++i)
+    if (memcmp(fleetMembers[i].mac, mac, 6) == 0) return i;
+  return -1;
+}
+
+// Coordinator: choose the BLE node (prefer a non-coordinator) and the SD sink.
+void fleetDealRoster() {
+  fleetBleNodeIndex = -1;
+  for (int i = 0; i < fleetMemberCount; ++i)
+    if (i != fleetCoordIndex && (fleetMembers[i].caps & kFleetCapBle)) {
+      fleetBleNodeIndex = i; break;
+    }
+  if (fleetBleNodeIndex < 0 && (fleetMembers[fleetCoordIndex].caps & kFleetCapBle))
+    fleetBleNodeIndex = fleetCoordIndex;
+  fleetSinkIndex = -1;
+  for (int i = 0; i < fleetMemberCount; ++i)
+    if (fleetMembers[i].caps & kFleetCapSd) { fleetSinkIndex = i; break; }
+}
+
+void fleetBroadcastRoster() {
+  if (!fleetCoordinator || !linkEspNowReady) return;
+  FleetRoster r;
+  r.sessionId = fleetSessionId;
+  r.code = fleetCode;
+  r.memberCount = static_cast<uint8_t>(fleetMemberCount);
+  r.bleNodeIndex = fleetBleNodeIndex < 0 ? 0xFF : static_cast<uint8_t>(fleetBleNodeIndex);
+  r.sinkNodeIndex = fleetSinkIndex < 0 ? 0xFF : static_cast<uint8_t>(fleetSinkIndex);
+  r.coordIndex = static_cast<uint8_t>(fleetCoordIndex);
+  r.wardriveOn = fleetWardriveOn ? 1 : 0;
+  fleetMembers[fleetCoordIndex].battery = static_cast<uint8_t>(batteryPercentNow());
+  for (int i = 0; i < fleetMemberCount && i < kFleetMaxNodes; ++i) {
+    memcpy(r.members[i].mac, fleetMembers[i].mac, 6);
+    r.members[i].caps = fleetMembers[i].caps;
+    r.members[i].battery = fleetMembers[i].battery;
+  }
+  esp_wifi_set_channel(kLinkChannel, WIFI_SECOND_CHAN_NONE);
+  esp_now_send(kLinkBroadcastAddr, reinterpret_cast<uint8_t*>(&r), sizeof(r));
+}
+
+void fleetBroadcastInvite() {
+  if (!fleetCoordinator || !linkEspNowReady) return;
+  LinkPacket p;
+  linkFillCommon(p, kLinkMsgFleetInvite);
+  p.sessionId = fleetSessionId;
+  p.code = fleetCode;
+  p.masterMillis = millis();  // members align their rendezvous window to this
+  esp_now_send(kLinkBroadcastAddr, reinterpret_cast<uint8_t*>(&p), sizeof(p));
+}
+
+// Arm a node to auto-join a fleet: bring ESP-NOW up and park on the rendezvous
+// channel so updateLink runs and hears the coordinator's invite.
+void fleetArm() {
+  if (!linkEnsureEspNow()) return;
+  fleetListening = true;
+  esp_wifi_set_channel(kLinkChannel, WIFI_SECOND_CHAN_NONE);
+  Serial.println("[fleet] armed; listening for an invite");
+}
+
+void fleetStartCoordinator() {
+  if (!linkEnsureEspNow()) return;
+  fleetActive = true;
+  fleetCoordinator = true;
+  memcpy(fleetCoordinatorMac, linkSelfMac, 6);
+  fleetSessionId = esp_random();
+  fleetCode = static_cast<uint16_t>(esp_random() % 10000);
+  fleetMemberCount = 1;
+  memcpy(fleetMembers[0].mac, linkSelfMac, 6);
+  fleetMembers[0].caps = fleetLocalCaps();
+  fleetMembers[0].lastSeenMs = millis();
+  fleetMembers[0].rows = 0;
+  fleetMembers[0].ackSeq = 0;
+  fleetMembers[0].battery = 0;
+  fleetCoordIndex = 0;
+  fleetMyIndex = 0;
+  fleetRowSeq = 0;
+  fleetAckedSeq = 0;
+  linkClockOffset = 0;
+  esp_wifi_set_channel(kLinkChannel, WIFI_SECOND_CHAN_NONE);
+  fleetDealRoster();
+  fleetBroadcastInvite();
+  fleetBroadcastRoster();
+  Serial.printf("[fleet] coordinator up, session %lu code %04u\n",
+                static_cast<unsigned long>(fleetSessionId), fleetCode);
+}
+
+// Worker heard an invite: join that session (auto-join; the code is shown on the
+// screen for the operator to eyeball).
+void fleetJoinFromInvite(const LinkPacket& p) {
+  if (fleetCoordinator || fleetActive) return;
+  fleetActive = true;
+  fleetCoordinator = false;
+  fleetSessionId = p.sessionId;
+  fleetCode = p.code;
+  memcpy(fleetCoordinatorMac, p.srcMac, 6);
+  fleetRowSeq = 0;
+  fleetAckedSeq = 0;
+  linkClockOffset =
+      static_cast<int32_t>(p.masterMillis) - static_cast<int32_t>(millis());
+  fleetSendJoin();
+  fleetListening = false;  // the deliberate arm is consumed; we are now a member
+}
+
+// Worker -> pinned coordinator join/heartbeat. Repeating this does not reset
+// worker state; it only lets the coordinator maintain a live connected count.
+void fleetSendJoin() {
+  LinkPacket j;
+  linkFillCommon(j, kLinkMsgFleetJoin);
+  j.sessionId = fleetSessionId;
+  j.flags = fleetLocalCaps();
+  esp_now_send(kLinkBroadcastAddr, reinterpret_cast<uint8_t*>(&j), sizeof(j));
+}
+
+void fleetCoordHandleJoin(const LinkPacket& p) {
+  if (!fleetCoordinator || p.sessionId != fleetSessionId) return;
+  int idx = fleetIndexOfMac(p.srcMac);
+  if (idx < 0) {
+    if (fleetMemberCount >= kFleetMaxNodes) return;
+    idx = fleetMemberCount++;
+    memcpy(fleetMembers[idx].mac, p.srcMac, 6);
+    fleetMembers[idx].rows = 0;
+    fleetMembers[idx].ackSeq = 0;
+    Serial.printf("[fleet] member %d joined\n", idx);
+  }
+  fleetMembers[idx].caps = p.flags;
+  fleetMembers[idx].lastSeenMs = millis();
+  fleetDealRoster();
+  fleetBroadcastRoster();
+  if (currentView == View::kLinkWardrive) drawFleetStatus();
+}
+
+// A worker only accepts rosters from the coordinator/session it deliberately
+// joined. Coordinators never consume a received roster: Start is an explicit
+// authority choice, not an election, so another chip cannot demote it.
+void fleetApplyRoster(const FleetRoster& r) {
+  if (!fleetActive || fleetCoordinator) return;
+  if (r.sessionId != fleetSessionId) return;
+  if (r.memberCount == 0 || r.memberCount > kFleetMaxNodes) return;
+  if (r.coordIndex >= r.memberCount) return;
+  if (memcmp(r.members[r.coordIndex].mac, fleetCoordinatorMac, 6) != 0) {
+    Serial.println("[fleet] ignored roster from unpinned coordinator");
+    return;
+  }
+
+  int myIndex = -1;
+  for (int i = 0; i < r.memberCount; ++i) {
+    if (memcmp(r.members[i].mac, linkSelfMac, 6) == 0) {
+      myIndex = i;
+      break;
+    }
+  }
+  // Never default an absent worker to slot zero: slot zero is normally the
+  // coordinator, which was the source of workers promoting themselves.
+  if (myIndex < 0) {
+    Serial.println("[fleet] ignored roster that does not contain this node");
+    return;
+  }
+
+  fleetCode = r.code;
+  fleetMemberCount = r.memberCount;
+  for (int i = 0; i < fleetMemberCount; ++i) {
+    memcpy(fleetMembers[i].mac, r.members[i].mac, 6);
+    fleetMembers[i].caps = r.members[i].caps;
+    fleetMembers[i].battery = r.members[i].battery;
+  }
+  fleetCoordIndex = r.coordIndex;
+  fleetBleNodeIndex = r.bleNodeIndex == 0xFF ? -1 : r.bleNodeIndex;
+  fleetSinkIndex = r.sinkNodeIndex == 0xFF ? -1 : r.sinkNodeIndex;
+  fleetMyIndex = myIndex;
+  Serial.printf("[fleet] roster N=%d myIndex=%d role=%s wifiSlice=%d/%d coord=%d\n",
+                fleetMemberCount, fleetMyIndex,
+                fleetImBleNode() ? "BLE" : "WIFI",
+                fleetMyWifiSlice(), fleetWifiWorkerCount(), fleetCoordIndex);
+  fleetWardriveOn = r.wardriveOn != 0;
+  if (fleetWardriveOn && !linkWardriveActive) {
+    startLinkWardrive();          // join the drive in progress
+  } else if (!fleetWardriveOn && linkWardriveActive) {
+    fleetStopLocal();             // coordinator ended the drive
+  }
+}
+
+// Wi-Fi workers = every member except the dedicated BLE node; my rank among them
+// drives the N-way channel deal.
+int fleetWifiWorkerCount() {
+  int n = 0;
+  for (int i = 0; i < fleetMemberCount; ++i)
+    if (i != fleetBleNodeIndex) ++n;
+  return n < 1 ? 1 : n;
+}
+int fleetMyWifiSlice() {
+  int rank = 0;
+  for (int i = 0; i < fleetMemberCount; ++i) {
+    if (i == fleetBleNodeIndex) continue;
+    if (i == fleetMyIndex) return rank;
+    ++rank;
+  }
+  return 0;
+}
+bool fleetImBleNode() { return fleetActive && fleetMyIndex == fleetBleNodeIndex; }
+
+// Coordinator housekeeping: re-broadcast invite/roster and drop silent members.
+void fleetCoordinatorTick(uint32_t now) {
+  if (!fleetCoordinator) return;
+  bool rosterChanged = false;
+  for (int i = fleetMemberCount - 1; i >= 0; --i) {
+    if (i == fleetCoordIndex) continue;
+    if (now - fleetMembers[i].lastSeenMs <= kFleetMemberTimeoutMs) continue;
+    Serial.printf("[fleet] member %d timed out\n", i);
+    for (int j = i; j + 1 < fleetMemberCount; ++j)
+      fleetMembers[j] = fleetMembers[j + 1];
+    --fleetMemberCount;
+    rosterChanged = true;
+  }
+  if (rosterChanged) {
+    fleetDealRoster();
+    fleetBroadcastRoster();
+    if (currentView == View::kLinkWardrive) drawFleetStatus();
+  }
+  if (now - lastFleetInviteMs >= kFleetInviteIntervalMs) {
+    lastFleetInviteMs = now;
+    fleetBroadcastInvite();
+  }
+  if (now - lastFleetRosterMs >= kFleetRosterIntervalMs) {
+    lastFleetRosterMs = now;
+    fleetBroadcastRoster();
+  }
+  static uint32_t lastFleetStatusMs = 0;
+  if (linkWardriveActive && now - lastFleetStatusMs >= 3000) {
+    lastFleetStatusMs = now;
+    Serial.printf("[fleet] N=%d agg wifi=%lu ble=%lu | rows",
+                  fleetMemberCount, (unsigned long)wardriveNetworks,
+                  (unsigned long)wardriveBleCount);
+    for (int i = 0; i < fleetMemberCount; ++i)
+      Serial.printf(" m%d=%lu", i, (unsigned long)fleetMembers[i].rows);
+    Serial.println();
+  }
+}
+// ---- Fleet Wardrive Phase 2: row aggregation -----------------------------
+// Worker outbound ring: new rows wait here until the coordinator ACKs them.
+static FleetWardriveRow fleetOutRing[kFleetRowRingSlots];
+static int fleetOutHead = 0;
+static int fleetOutTail = 0;
+
+void fleetQueueOutRow(const uint8_t* id, const String& name, uint8_t auth,
+                      uint8_t channel, int rssi, bool isBle) {
+  FleetWardriveRow r;
+  r.sessionId = fleetSessionId;
+  r.seq = ++fleetRowSeq;
+  memcpy(r.src, linkSelfMac, 6);
+  memcpy(r.id, id, 6);
+  r.rssi = static_cast<int8_t>(rssi);
+  r.channel = channel;
+  r.auth = auth;
+  r.isBle = isBle ? 1 : 0;
+  r.battery = static_cast<uint8_t>(batteryPercentNow());
+  r.lat = gps.location.isValid() ? static_cast<float>(gps.location.lat()) : 0.0f;
+  r.lon = gps.location.isValid() ? static_cast<float>(gps.location.lng()) : 0.0f;
+  r.alt = static_cast<int16_t>(gps.altitude.isValid() ? gps.altitude.meters() : 0);
+  strncpy(r.name, name.c_str(), sizeof(r.name) - 1);
+  const int next = (fleetOutHead + 1) % kFleetRowRingSlots;
+  if (next == fleetOutTail)  // ring full: drop oldest unacked row
+    fleetOutTail = (fleetOutTail + 1) % kFleetRowRingSlots;
+  fleetOutRing[fleetOutHead] = r;
+  fleetOutHead = next;
+}
+
+// Worker: during a window, drop ACKed rows and (re)send a few unacked ones to
+// the coordinator (broadcast; only the coordinator stores them).
+void fleetWorkerSendRows() {
+  while (fleetOutTail != fleetOutHead &&
+         fleetOutRing[fleetOutTail].seq <= fleetAckedSeq)
+    fleetOutTail = (fleetOutTail + 1) % kFleetRowRingSlots;
+  int idx = fleetOutTail, sent = 0;
+  while (idx != fleetOutHead && sent < 8) {
+    esp_now_send(kLinkBroadcastAddr,
+                 reinterpret_cast<uint8_t*>(&fleetOutRing[idx]),
+                 sizeof(FleetWardriveRow));
+    idx = (idx + 1) % kFleetRowRingSlots;
+    ++sent;
+    delay(3);
+  }
+}
+
+// Coordinator: merge every inbound row (dedup + SD + phone) and advance each
+// member's contiguous ACK high-water.
+void fleetCoordDrainRows() {
+  if (!fleetCoordinator) { fleetRowTail = fleetRowHead; return; }
+  while (fleetRowTail != fleetRowHead) {
+    FleetWardriveRow r = fleetRowRing[fleetRowTail];
+    fleetRowTail = (fleetRowTail + 1) % kFleetRowRingSlots;
+    if (r.sessionId != fleetSessionId) continue;
+    const int m = fleetIndexOfMac(r.src);
+    if (m >= 0) {
+      fleetMembers[m].lastSeenMs = millis();
+      if (r.seq == fleetMembers[m].ackSeq + 1) fleetMembers[m].ackSeq = r.seq;
+      fleetMembers[m].rows++;
+      fleetMembers[m].battery = r.battery;
+    }
+    wardriveEmitPeerRow(r);  // dedups by id; writes SD + streams to phone
+  }
+}
+
+// Coordinator: tell each member the highest contiguous row seq stored, so it can
+// free ACKed rows and resend only the gap.
+void fleetSendAcks() {
+  if (!fleetCoordinator) return;
+  for (int i = 0; i < fleetMemberCount; ++i) {
+    if (i == fleetCoordIndex) continue;
+    FleetAck a;
+    a.sessionId = fleetSessionId;
+    memcpy(a.targetMac, fleetMembers[i].mac, 6);
+    a.seq = fleetMembers[i].ackSeq;
+    esp_now_send(kLinkBroadcastAddr, reinterpret_cast<uint8_t*>(&a), sizeof(a));
+  }
+}
+
+// Coordinator entry point: form the session (if needed) and start fleet wardrive
+// on every member (the roster's wardriveOn flag makes joiners start too).
+void fleetStartWardrive() {
+  if (!fleetActive) fleetStartCoordinator();
+  if (!fleetCoordinator) return;  // only the coordinator starts the fleet
+  fleetWardriveOn = true;
+  fleetBroadcastRoster();
+  startLinkWardrive();  // scan our slice + aggregate locally
+}
+
+// The designated BLE node runs a continuous BLE observer scan (co-resident with
+// Wi-Fi/ESP-NOW) instead of hopping Wi-Fi channels, and ships BLE rows to the
+// coordinator in the rendezvous window. It parks on the link channel since it
+// never Wi-Fi-hops.
+void fleetBleNodeStart() {
+  esp_wifi_set_channel(kLinkChannel, WIFI_SECOND_CHAN_NONE);
+  if (!ensureBleReady(true)) return;  // BLE up; keep Wi-Fi/ESP-NOW resident
+  NimBLEScan* scan = NimBLEDevice::getScan();
+  configureBleScan(scan, &wardriveBleCallbacks, false, 160, 80, 0);
+  scan->start(0, false, true);
+  fleetBleScanRunning = true;
+  Serial.println("[fleet] BLE node scanning");
+}
+
+void fleetStopLocal() {
+  linkWardriveActive = false;
+  if (fleetBleScanRunning) {
+    NimBLEScan* scan = NimBLEDevice::getScan();
+    if (scan) { scan->stop(); scan->clearResults(); }
+    fleetBleScanRunning = false;
+  }
+}
+
+// Coordinator: stop the fleet wardrive but keep the session up (members stop via
+// the roster's wardriveOn flag). A second tap on Go restarts it.
+void fleetStopWardrive() {
+  if (!fleetCoordinator) return;
+  fleetWardriveOn = false;
+  fleetBroadcastRoster();
+  fleetStopLocal();
+}
+
+// Tear the whole fleet down on this node. If we are the coordinator, tell the
+// members to stop first. Leaves us back on the idle Link screen.
+void fleetLeave() {
+  if (fleetCoordinator && fleetWardriveOn) {
+    fleetWardriveOn = false;
+    fleetBroadcastRoster();  // members drop out of the drive
+  }
+  fleetStopLocal();
+  fleetActive = false;
+  fleetListening = false;
+  fleetCoordinator = false;
+  memset(fleetCoordinatorMac, 0, sizeof(fleetCoordinatorMac));
+  fleetWardriveOn = false;
+  fleetMemberCount = 0;
+  fleetMyIndex = 0;
+  fleetCoordIndex = 0;
+  fleetBleNodeIndex = -1;
+  fleetSinkIndex = -1;
+  fleetMenuOpen = false;
+  Serial.println("[fleet] left the session");
+}
+
+void updateFleetBleNode(uint32_t now) {
+  if (!fleetBleScanRunning) fleetBleNodeStart();
+  while (bleHitTail != bleHitHead) {
+    const BleHit& hit = bleHitQueue[bleHitTail];
+    uint8_t mac[6];
+    if (gpsHasFix() && parseBssid(String(hit.addr), mac) &&
+        !wardriveMacSeen(mac)) {
+      wardriveAddMac(mac);
+      if (fleetCoordinator)
+        appendWardriveBleRow(String(hit.addr), String(hit.name), hit.rssi);
+      else
+        fleetQueueOutRow(mac, String(hit.name), 0, 0, hit.rssi, true);
+      ++wardriveBleCount;
+    }
+    bleHitTail = (bleHitTail + 1) % kBleHitQueueSlots;
+  }
+  const uint32_t lnow = linkNow();
+  const bool windowDue = (lnow % kLinkRendezvousMs) < kLinkWindowMs;
+  if (windowDue && now - lastLinkTelemMs >= 60) {
+    lastLinkTelemMs = now;
+    if (fleetCoordinator) { fleetSendAcks(); fleetCoordDrainRows(); }
+    else fleetWorkerSendRows();
+  }
+  if (windowDue) linkMaybeBroadcastRemoteStatus(now);
+  if (currentView == View::kLinkWardrive &&
+      now - lastLinkWardriveDrawMs >= kLinkWardriveRedrawMs) {
+    lastLinkWardriveDrawMs = now;
+    drawLinkWardrive();
+  }
+}
+
 
 uint16_t linkComputeCode(const uint8_t* a, const uint8_t* b) {
   // Deterministic on the unordered MAC pair, so both units show the same code.
@@ -203,6 +691,37 @@ void linkHandlePacket(const LinkQueueItem& item) {
   const LinkPacket& p = item.pkt;
   if (p.magic != kLinkMagic || p.version != kLinkProtoVersion) return;
   if (memcmp(p.srcMac, linkSelfMac, 6) == 0) return;  // ignore our own echo
+
+  // Fleet Wardrive control frames (see link_protocol.h).
+  if (p.type == kLinkMsgFleetInvite) {
+    if (fleetCoordinator) {
+      // Start is authoritative. A coordinator never participates in election
+      // or steps down because another chip also broadcasts an invite.
+      return;
+    }
+    // A joined worker is pinned to one coordinator/session until Leave. Reply
+    // periodically as a heartbeat so the coordinator's node count stays live.
+    if (fleetActive) {
+      if (p.sessionId == fleetSessionId &&
+          memcmp(p.srcMac, fleetCoordinatorMac, 6) == 0) {
+        static uint32_t lastFleetHeartbeatMs = 0;
+        const uint32_t now = millis();
+        if (now - lastFleetHeartbeatMs >= 1000) {
+          lastFleetHeartbeatMs = now;
+          fleetSendJoin();
+        }
+      }
+      return;
+    }
+    // Otherwise only join if the operator deliberately armed this node (Join
+    // button / serial `j`). Powering up must never auto-link a chip into a fleet.
+    if (fleetListening) fleetJoinFromInvite(p);
+    return;
+  }
+  if (p.type == kLinkMsgFleetJoin) {
+    fleetCoordHandleJoin(p);
+    return;
+  }
 
   if (p.type == kLinkMsgHello) {
     if (linkState == kLinkDiscovering) {
@@ -398,6 +917,10 @@ void linkDispatchCommand(uint8_t op, uint8_t arg) {
     case kAxdCmdTrackSel:
       if (selectedWifi.bssid.length()) beginWifiSignalMonitor();
       break;
+    // Fleet control (phone or on-device buttons)
+    case kAxdCmdFleetStart: fleetStartWardrive(); break;
+    case kAxdCmdFleetJoin: fleetArm(); break;
+    case kAxdCmdFleetStop: fleetLeave(); break;
     case kAxdCmdStopHome: stopActiveTools(); drawHome(); break;
     default: break;
   }
@@ -411,7 +934,8 @@ void linkBroadcastStatus() {
   // Bridge -> phone directly: [wifi u32][ble u32][tool u8][gpsFix u8][sats u8]
   // [lat f32][lon f32] (source tag prefixed by bridgeNotifyStatus). The app
   // reads the GPS tail when present so the headless bridge's fix shows on-phone.
-  uint8_t blob[19];
+  // ...then a fleet tail: [active u8][members u8][code u16][coordinator u8].
+  uint8_t blob[24];
   memcpy(blob + 0, &nets, 4);
   memcpy(blob + 4, &ble, 4);
   blob[8] = view;
@@ -422,6 +946,13 @@ void linkBroadcastStatus() {
   float lon = gps.location.isValid() ? static_cast<float>(gps.location.lng()) : 0.0f;
   memcpy(blob + 11, &lat, 4);
   memcpy(blob + 15, &lon, 4);
+  blob[19] = (fleetActive || fleetListening) ? 1 : 0;
+  blob[20] = static_cast<uint8_t>(fleetMemberCount);
+  uint16_t fcode = fleetCode;
+  memcpy(blob + 21, &fcode, 2);
+  blob[23] = (fleetCoordinator ? 0x01 : 0) |
+             (fleetListening && !fleetActive ? 0x02 : 0) |
+             (fleetWardriveOn ? 0x04 : 0);
   bridgeNotifyStatus(kSourceBridge, blob, sizeof(blob));
   return;
 #else
@@ -431,8 +962,33 @@ void linkBroadcastStatus() {
   p.networks = nets;
   p.bleCount = ble;
   p.channel = view;  // "tool id" for the phone UI
+  p.flags = kLinkTelemStatus |
+            ((fleetActive || fleetListening) ? kLinkTelemFleetActive : 0) |
+            (fleetCoordinator ? kLinkTelemFleetCoordinator : 0) |
+            (fleetListening && !fleetActive ? kLinkTelemFleetListening : 0) |
+            (fleetWardriveOn ? kLinkTelemFleetRunning : 0) |
+            (gpsHasFix() ? kLinkTelemGpsFix : 0);
+  p.code = fleetCode;
+  const uint8_t sats = static_cast<uint8_t>(
+      gps.satellites.isValid() ? gps.satellites.value() : 0);
+  p.reserved = static_cast<uint16_t>(static_cast<uint8_t>(fleetMemberCount)) |
+               (static_cast<uint16_t>(sats) << 8);
+  const float lat = gps.location.isValid() ? static_cast<float>(gps.location.lat()) : 0.0f;
+  const float lon = gps.location.isValid() ? static_cast<float>(gps.location.lng()) : 0.0f;
+  memcpy(&p.sessionId, &lat, sizeof(lat));
+  memcpy(&p.masterMillis, &lon, sizeof(lon));
   esp_now_send(kLinkBroadcastAddr, reinterpret_cast<uint8_t*>(&p), sizeof(p));
 #endif
+}
+
+// During fleet scanning the ordinary idle status path is not active. Send the
+// selected screen chip's status while every radio is back on the rendezvous
+// channel so the bridge/web UI retains live fleet membership and state.
+void linkMaybeBroadcastRemoteStatus(uint32_t now) {
+  static uint32_t lastRemoteFleetStatusMs = 0;
+  if (!remoteActive || now - lastRemoteFleetStatusMs < 1000) return;
+  lastRemoteFleetStatusMs = now;
+  linkBroadcastStatus();
 }
 
 // Always-on from boot: keep ESP-NOW listening so the phone can drive this chip
@@ -543,26 +1099,40 @@ int linkPlanCount() {
 
 uint8_t linkNextAssignedChannel() {
   LinkPlan plan;
-  const bool deal = linkAssignedPlan(plan);
+  const bool dealPair = linkAssignedPlan(plan);
   const int count = linkPlanSize(plan);
-  const int parity = linkRoleMaster ? 0 : 1;
+  int m = 1, slice = 0;  // deal the plan m ways; take slice `slice`
+  if (fleetActive) {
+    m = fleetWifiWorkerCount();
+    slice = fleetMyWifiSlice();
+  } else if (dealPair) {
+    m = 2;
+    slice = linkRoleMaster ? 0 : 1;
+  }
   for (int tries = 0; tries < count; ++tries) {
     const int idx = linkChannelCursor % count;
     linkChannelCursor = (linkChannelCursor + 1) % count;
-    if (!deal || (idx % 2) == parity) return linkPlanAt(plan, idx);
+    if (m <= 1 || (idx % m) == slice) return linkPlanAt(plan, idx);
   }
   return linkPlanAt(plan, 0);
 }
 
 int linkAssignedChannelCount() {
   LinkPlan plan;
-  const bool deal = linkAssignedPlan(plan);
+  const bool dealPair = linkAssignedPlan(plan);
   const int count = linkPlanSize(plan);
-  if (!deal) return count;  // solo or mixed: this unit scans the whole set
+  int m = 1, slice = 0;
+  if (fleetActive) {
+    m = fleetWifiWorkerCount();
+    slice = fleetMyWifiSlice();
+  } else if (dealPair) {
+    m = 2;
+    slice = linkRoleMaster ? 0 : 1;
+  }
+  if (m <= 1) return count;  // solo/mixed: whole set
   int n = 0;
-  const int parity = linkRoleMaster ? 0 : 1;
   for (int i = 0; i < count; ++i)
-    if ((i % 2) == parity) ++n;
+    if ((i % m) == slice) ++n;
   return n;
 }
 
@@ -576,12 +1146,18 @@ void linkIngestScan(int result) {
   for (int i = 0; i < result; ++i) {
     uint8_t* bssid = WiFi.BSSID(i);
     if (!bssid) continue;
-    if (gpsHasFix() && !wardriveMacSeen(bssid)) {
-      wardriveAddMac(bssid);
+    if (!gpsHasFix() || wardriveMacSeen(bssid)) continue;
+    wardriveAddMac(bssid);
+    if (fleetActive && !fleetCoordinator) {
+      // Worker: queue the row for the coordinator to merge (one CSV).
+      fleetQueueOutRow(bssid, WiFi.SSID(i), WiFi.encryptionType(i),
+                       WiFi.channel(i), WiFi.RSSI(i), false);
+    } else {
+      // Coordinator/solo: write + stream directly.
       appendWardriveRow(WiFi.BSSIDstr(i), WiFi.SSID(i), WiFi.encryptionType(i),
                         WiFi.channel(i), WiFi.RSSI(i));
-      ++wardriveNetworks;
     }
+    ++wardriveNetworks;
   }
 }
 
@@ -629,7 +1205,8 @@ void stopLinkWardrive() {
 }
 
 void updateLinkWardrive(uint32_t now) {
-  const bool paired = linkState == kLinkReady;
+  if (fleetImBleNode()) { updateFleetBleNode(now); return; }
+  const bool paired = (linkState == kLinkReady) || fleetActive;
 
   if (paired) {
     const uint32_t lnow = linkNow();
@@ -652,9 +1229,15 @@ void updateLinkWardrive(uint32_t now) {
         }
         if (now - lastLinkTelemMs >= 60) {
           lastLinkTelemMs = now;
-          linkSendTelem();
+          if (fleetActive) {
+            if (fleetCoordinator) { fleetSendAcks(); fleetCoordDrainRows(); }
+            else fleetWorkerSendRows();
+          } else {
+            linkSendTelem();
+          }
         }
-        if (linkRoleMaster && now - lastLinkSyncMs >= 90) {
+        linkMaybeBroadcastRemoteStatus(now);
+        if (!fleetActive && linkRoleMaster && now - lastLinkSyncMs >= 90) {
           lastLinkSyncMs = now;
           linkSendSync();
         }
@@ -689,9 +1272,22 @@ void updateLinkWardrive(uint32_t now) {
 }
 
 void updateLink() {
-  if (linkState == kLinkOff && !linkWardriveActive && !remoteActive) return;
+  if (linkState == kLinkOff && !linkWardriveActive && !remoteActive &&
+      !fleetActive && !fleetListening)
+    return;
   linkDrainPackets();
   const uint32_t now = millis();
+
+  // Fleet housekeeping: apply any roster the recv callback captured, and (as
+  // coordinator) keep inviting + re-broadcasting the roster.
+  if (fleetRosterPending) {
+    fleetRosterPending = false;
+    fleetApplyRoster(fleetPendingRoster);
+  }
+  if (fleetActive) {
+    fleetCoordinatorTick(now);
+    fleetCoordDrainRows();
+  }
 
   // Remote-control housekeeping: drain commands (done above), keep ESP-NOW alive,
   // re-home to the rendezvous channel when idle so the bridge can reach us, and
@@ -734,7 +1330,117 @@ void openLinkWardrive() {
   drawLinkWardrive();
 }
 
+// Human-readable role for a member row on the fleet screen.
+static const char* fleetRoleLabel(int idx) {
+  if (idx == fleetBleNodeIndex) return "BLE";
+  if (idx == fleetCoordIndex) return "coord";
+  return "wifi";
+}
+
+// Fleet entry menu (no session yet): choose Start (become coordinator) or Join.
+void drawFleetMenu() {
+  currentView = View::kLinkWardrive;
+  display.fillScreen(kBackground);
+  drawHeader("FLEET", "multi-node wardrive");
+  display.setTextSize(2);
+  display.setTextColor(kAccent, kBackground);
+  display.setCursor(6, 54);
+  display.print("FLEET");
+  display.setTextSize(1);
+  display.setTextColor(ILI9341_WHITE, kBackground);
+  display.setCursor(6, 88);
+  display.print("Link several C5 chips to split");
+  display.setCursor(6, 100);
+  display.print("the channels into ONE merged CSV.");
+  display.setTextColor(kMuted, kBackground);
+  display.setCursor(6, 124);
+  display.print("Start - be the coordinator; others");
+  display.setCursor(6, 136);
+  display.print("        join and it deals the plan.");
+  display.setCursor(6, 152);
+  display.print("Join  - listen for a coordinator's");
+  display.setCursor(6, 164);
+  display.print("        invite and auto-join it.");
+  display.setTextColor(linkEspNowReady ? kGood : kBad, kBackground);
+  display.setCursor(6, 188);
+  display.print(linkEspNowReady ? "ESP-NOW ready" : "ESP-NOW unavailable");
+  drawThreeButtonFooter("Back", "Start", "Join");
+}
+
+// Live fleet view: session code, members + roles + row counts, aggregate.
+void drawFleetStatus() {
+  currentView = View::kLinkWardrive;
+  display.fillScreen(kBackground);
+  const bool joining = fleetListening && !fleetActive;
+  drawHeader("FLEET", fleetCoordinator ? "coordinator"
+                       : joining        ? "joining..."
+                                        : "member");
+
+  if (joining) {
+    display.setTextSize(2);
+    display.setTextColor(kWarn, kBackground);
+    display.setCursor(6, 60);
+    display.print("LISTENING");
+    display.setTextSize(1);
+    display.setTextColor(ILI9341_WHITE, kBackground);
+    display.setCursor(6, 96);
+    display.print("Waiting for a coordinator invite.");
+    display.setCursor(6, 108);
+    display.print("Start a fleet on another chip.");
+    drawFooter("Leave", "Home");
+    return;
+  }
+
+  display.setTextSize(1);
+  display.setTextColor(kMuted, kBackground);
+  display.setCursor(6, 46);
+  display.print("Code");
+  display.setTextSize(2);
+  display.setTextColor(kAccent, kBackground);
+  display.setCursor(6, 58);
+  char code[8];
+  snprintf(code, sizeof(code), "%04u", fleetCode);
+  display.print(code);
+
+  display.setTextSize(1);
+  display.setTextColor(fleetWardriveOn ? kGood : kWarn, kBackground);
+  display.setCursor(120, 52);
+  display.print(fleetWardriveOn ? (gpsHasFix() ? "LOGGING" : "NO FIX") : "READY");
+  display.setTextColor(ILI9341_WHITE, kBackground);
+  display.setCursor(120, 68);
+  display.printf("Nodes: %d", fleetMemberCount);
+
+  int y = 92;
+  for (int i = 0; i < fleetMemberCount && i < kFleetMaxNodes; ++i) {
+    const bool me = (i == fleetMyIndex);
+    display.setTextColor(me ? ILI9341_WHITE : kMuted, kBackground);
+    display.setCursor(6, y);
+    display.printf("M%d %-5s %02x%02x %lu %d%%%s", i, fleetRoleLabel(i),
+                   fleetMembers[i].mac[4], fleetMembers[i].mac[5],
+                   static_cast<unsigned long>(fleetMembers[i].rows),
+                   fleetMembers[i].battery, me ? " *" : "");
+    y += 12;
+  }
+
+  display.setTextColor(kAccent, kBackground);
+  display.setCursor(6, y + 6);
+  display.printf("Agg: %lu wifi  %lu ble",
+                 static_cast<unsigned long>(wardriveNetworks),
+                 static_cast<unsigned long>(wardriveBleCount));
+  display.setTextColor(kMuted, kBackground);
+  display.setCursor(6, y + 22);
+  display.print("CSV -> SD + phone (merged).");
+
+  if (fleetCoordinator) {
+    drawThreeButtonFooter("Home", "Leave", fleetWardriveOn ? "Stop" : "Go");
+  } else {
+    drawFooter("Leave", "Home");
+  }
+}
+
 void drawLinkWardrive() {
+  if (fleetActive || fleetListening) { drawFleetStatus(); return; }
+  if (fleetMenuOpen) { drawFleetMenu(); return; }
   currentView = View::kLinkWardrive;
   display.fillScreen(kBackground);
 
@@ -788,8 +1494,8 @@ void drawLinkWardrive() {
     display.printf("Session %lu", static_cast<unsigned long>(linkSessionId));
     display.setTextColor(wardriveCsvReady ? kAccent : kWarn, kBackground);
     display.setCursor(6, 196);
-    display.print(wardriveCsvReady ? "SD: wardrive.csv (WiGLE)"
-                                   : "SD unavailable; not logging");
+    if (wardriveCsvReady) display.print("SD: " + wardriveCsvName());
+    else display.print("SD unavailable; not logging");
     display.setTextColor(kMuted, kBackground);
     display.setCursor(6, 216);
     display.print("Wi-Fi only in Link mode (no BLE).");
@@ -883,12 +1589,12 @@ void drawLinkWardrive() {
   display.print("split-channel wardrive together.");
   display.setTextColor(kMuted, kBackground);
   display.setCursor(6, 122);
-  display.print("Pair  - find + confirm a partner");
+  display.print("Fleet - link 2+ chips, one CSV");
   display.setCursor(6, 134);
   display.print("Solo  - wardrive all channels now");
   display.setCursor(6, 158);
-  display.print("Paired, each unit scans half the");
+  display.print("A fleet splits the channel plan N");
   display.setCursor(6, 170);
-  display.print("band so you cover it twice as fast.");
-  drawThreeButtonFooter("Back", "Pair", "Solo");
+  display.print("ways so you cover the band faster.");
+  drawThreeButtonFooter("Back", "Fleet", "Solo");
 }

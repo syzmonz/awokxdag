@@ -28,6 +28,12 @@ enum LinkMsgType : uint8_t {
   kLinkMsgTelem = 3,       // running counts + channel + session id (status back)
   kLinkMsgCommand = 4,     // bridge -> screen: run a tool (opcode in `reserved`)
   kLinkMsgWifiResult = 5,  // screen -> bridge: one scanned AP (AxdWifiResult)
+  // Fleet Wardrive (N linked nodes splitting the channel plan into one CSV):
+  kLinkMsgFleetInvite = 6,    // coordinator -> all: join my session (LinkPacket)
+  kLinkMsgFleetJoin = 7,      // member -> coordinator: joining (caps in flags)
+  kLinkMsgFleetRoster = 8,    // coordinator -> all: the roster (FleetRoster)
+  kLinkMsgFleetWardriveRow = 9,  // member -> coordinator: one WiGLE row
+  kLinkMsgFleetAck = 10,      // coordinator -> member: rows up to seq received
 };
 
 // One ESP-NOW frame. POD, 36 bytes on every supported ABI, copied verbatim.
@@ -56,6 +62,15 @@ static_assert(sizeof(LinkPacket) == 36,
 constexpr uint8_t kLinkFlagConfirmed = 0x01;
 constexpr uint8_t kLinkFlagDualBand = 0x02;  // sender's radio covers 5 GHz too
 
+// kLinkMsgTelem status flags. Message types give `flags` separate semantics,
+// so these may overlap the HELLO-only flags above without changing the wire ABI.
+constexpr uint8_t kLinkTelemStatus = 0x80;       // full remote status payload
+constexpr uint8_t kLinkTelemFleetActive = 0x01;
+constexpr uint8_t kLinkTelemFleetCoordinator = 0x02;
+constexpr uint8_t kLinkTelemFleetListening = 0x04;
+constexpr uint8_t kLinkTelemFleetRunning = 0x08;
+constexpr uint8_t kLinkTelemGpsFix = 0x10;
+
 // One scanned Wi-Fi AP, streamed screen -> bridge -> phone so the phone can show
 // a list and pick a target. Shares the magic/version/type prefix with LinkPacket
 // so the bridge can tell frames apart by type; it is a different size (~50 B),
@@ -71,6 +86,67 @@ struct AxdWifiResult {
   uint8_t channel = 0;
   uint8_t auth = 0;     // wifi_auth_mode_t
   char ssid[33] = {0};  // null-terminated (empty = hidden)
+};
+
+// ---- Fleet Wardrive -----------------------------------------------------
+// Up to this many linked chips split the channel plan and merge into one CSV.
+constexpr int kFleetMaxNodes = 6;
+
+// Member capability bits (FleetJoin flags / FleetRoster caps byte).
+constexpr uint8_t kFleetCapDualBand = 0x01;  // covers 5 GHz too
+constexpr uint8_t kFleetCapGps = 0x02;
+constexpr uint8_t kFleetCapSd = 0x04;
+constexpr uint8_t kFleetCapBle = 0x08;
+
+// Coordinator's roster broadcast: every node finds its own MAC to learn its
+// index, and derives its role (BLE node vs Wi-Fi slice = its rank among the
+// non-BLE members). One frame carries the whole fleet (~54 B for 6 nodes).
+struct FleetRoster {
+  uint32_t magic = kLinkMagic;
+  uint8_t version = kLinkProtoVersion;
+  uint8_t type = kLinkMsgFleetRoster;
+  uint32_t sessionId = 0;
+  uint16_t code = 0;         // short join code
+  uint8_t memberCount = 0;
+  uint8_t bleNodeIndex = 0xFF;  // member that scans BLE (0xFF = none)
+  uint8_t sinkNodeIndex = 0xFF; // SD-sink member (0xFF = none)
+  uint8_t coordIndex = 0;       // aggregator member index
+  uint8_t wardriveOn = 0;       // 1 = members should be running fleet wardrive
+  struct Member {
+    uint8_t mac[6] = {0};
+    uint8_t caps = 0;
+    uint8_t battery = 0;
+  } members[kFleetMaxNodes];
+};
+
+// One WiGLE row shipped worker -> coordinator during a rendezvous window.
+struct FleetWardriveRow {
+  uint32_t magic = kLinkMagic;
+  uint8_t version = kLinkProtoVersion;
+  uint8_t type = kLinkMsgFleetWardriveRow;
+  uint32_t sessionId = 0;
+  uint32_t seq = 0;      // per-sender sequence (coordinator ACKs a high-water)
+  uint8_t src[6] = {0};  // sender MAC (so the coordinator can ACK per member)
+  uint8_t id[6] = {0};   // BSSID (Wi-Fi) or address (BLE)
+  int8_t rssi = -127;
+  uint8_t channel = 0;
+  uint8_t auth = 0;      // wifi_auth_mode_t
+  uint8_t isBle = 0;
+  uint8_t battery = 0;
+  float lat = 0.0f;
+  float lon = 0.0f;
+  int16_t alt = 0;
+  char name[33] = {0};   // SSID or BLE name (null-terminated)
+};
+
+// Coordinator -> member: rows up to `seq` were stored, so retransmit only newer.
+struct FleetAck {
+  uint32_t magic = kLinkMagic;
+  uint8_t version = kLinkProtoVersion;
+  uint8_t type = kLinkMsgFleetAck;
+  uint32_t sessionId = 0;
+  uint8_t targetMac[6] = {0};
+  uint32_t seq = 0;
 };
 
 // Canonical channel plan — identical on every board (Split Wardrive deals from
@@ -149,5 +225,9 @@ enum AxdCommand : uint8_t {
   kAxdCmdDeauthSel = 52,    // deauth the selected AP
   kAxdCmdGrabSel = 53,      // handshake/PMKID grab on the selected AP
   kAxdCmdTrackSel = 54,     // RSSI-track the selected AP
+  // Fleet Wardrive control (multi-node; joining is always deliberate).
+  kAxdCmdFleetStart = 60,   // become coordinator + start the fleet wardrive
+  kAxdCmdFleetJoin = 61,    // arm this chip to auto-join a coordinator's fleet
+  kAxdCmdFleetStop = 62,    // leave the fleet (coordinator ends it for everyone)
   kAxdCmdStopHome = 255,
 };

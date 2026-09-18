@@ -25,6 +25,7 @@ float lastSavedConsumedMah = 0.0f;
 bool batteryLowLatched = false;
 bool batteryBannerActive = false;
 uint32_t batteryBannerMs = 0;
+bool batteryLimitEnforced = false;
 
 float batteryCapacityMah() {
   float c = static_cast<float>(deviceSettings.batteryCapacityMah);
@@ -93,7 +94,7 @@ int batteryPercentNow() {
   float remaining = cap - static_cast<float>(batteryConsumedMah);
   if (remaining < 0.0f) remaining = 0.0f;
   int pct = static_cast<int>(remaining / cap * 100.0f + 0.5f);
-  pct = (pct + 5) / 10 * 10;
+  pct = (pct + 2) / 5 * 5;
   if (pct > 100) pct = 100;
   return pct;
 }
@@ -136,7 +137,24 @@ void resetBatteryEstimate() {
   lastBatteryTickMs = millis();
   batteryLowLatched = false;
   batteryBannerActive = false;
+  batteryLimitEnforced = false;
   saveBatteryEstimate();
+}
+
+void batteryEnforceLimit() {
+  if (batteryPercentNow() > kBatteryLowPercent) {
+    batteryLimitEnforced = false;
+    return;
+  }
+  if (batteryLimitEnforced) return;
+  batteryLimitEnforced = true;
+  bool stopped = false;
+  if (deauthAttackActive) { stopDeauthAttack(); stopped = true; }
+  if (beaconFloodActive) { stopBeaconFlood(); stopped = true; }
+  if (evilPortalActive) { stopEvilPortal(); stopped = true; }
+  if (probeLureActive) { stopProbeLure(); stopped = true; }
+  if (authFloodActive) { stopAuthFlood(); stopped = true; }
+  if (stopped) drawStatus();
 }
 
 void updateBatteryEstimate() {
@@ -161,6 +179,7 @@ void updateBatteryEstimate() {
   } else {
     batteryLowLatched = false;
   }
+  batteryEnforceLimit();
 
   if (now - lastBatterySaveMs >= kBatterySaveIntervalMs &&
       fabsf(static_cast<float>(batteryConsumedMah) - lastSavedConsumedMah) >=
