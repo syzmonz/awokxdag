@@ -10,6 +10,8 @@ C5, white-USB screen board with an ILI9341 touchscreen).
 - **Target:** ESP32-C5 Dev Module, 8 MB flash, PSRAM, microSD
 - **Changelog:** [CHANGELOG.md](CHANGELOG.md)
 
+- **Battery Capacity Info:** This version of AxD is currently built against 1.4.4, it includes battery settings & info that I personally needed.
+
 
 > ## Authorized use only
 > This firmware transmits and disrupts networks (deauthentication, beacon
