@@ -49,6 +49,14 @@
   .net .mb { color:var(--muted); font-size:11px;
              font-variant-numeric:tabular-nums; }
   .net .rs { color:var(--muted); font-size:12px; white-space:nowrap; }
+  .conn { display:flex; gap:8px; align-items:center; padding:8px 10px;
+          border:1px solid var(--line); border-radius:8px; margin-bottom:6px;
+          cursor:pointer; }
+  .conn.sel { border-color:var(--accent); background:#12283f; }
+  .conn .nm { flex:1; min-width:0; }
+  .conn .ss { font-weight:600; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .conn .mb { color:var(--muted); font-size:11px; font-variant-numeric:tabular-nums; }
+  .conn .x { padding:6px 11px; background:#33191a; border-color:#5c2b2c; color:#ffb4ad; }
   .seg { display:flex; gap:0; border:1px solid var(--line); border-radius:10px; overflow:hidden; }
   .seg button { flex:1; border:0; border-radius:0; background:var(--card);
                 color:var(--muted); font-weight:600; padding:12px; cursor:pointer; }
@@ -58,7 +66,7 @@
 </head>
 <body>
   <h1>AxD&nbsp;Remote</h1>
-  <div class="sub">BLE control · orange bridge chip</div>
+  <div class="sub">BLE control · one or more orange bridge chips</div>
 
   <div id="nobt" class="banner" hidden>
     This browser has no Web Bluetooth. On iPhone use <b>Bluefy</b>; on Android/desktop
@@ -66,16 +74,18 @@
   </div>
 
   <div class="card">
-    <div class="row">
+    <div class="row" style="margin-bottom:10px">
       <span id="dot" class="dot"></span>
-      <span id="state" class="status">Disconnected</span>
-      <span style="flex:1"></span>
-      <button id="connect" class="primary">Connect</button>
+      <span id="state" class="status" style="flex:1">No bridges</span>
+      <button id="connect" class="primary">Add ESP</button>
     </div>
+    <div id="conns"><div class="k">No bridges connected. Tap Add ESP; add each
+      board's orange chip to control them all without reconnecting.</div></div>
   </div>
 
   <div class="card">
-    <div class="k" style="margin-bottom:8px">Target chip — where commands run</div>
+    <div class="k" style="margin-bottom:8px">Target chip — where commands run
+      (on the active bridge)</div>
     <div class="seg" id="target-seg">
       <button data-target="1" class="on">Screen chip</button>
       <button data-target="0">This bridge</button>
@@ -154,6 +164,21 @@
   </div>
 
   <div class="card">
+    <div class="k" style="margin-bottom:8px">Fleet — link several chips, one merged CSV</div>
+    <div class="grid" id="cmds-fleet">
+      <button data-op="60">Start Fleet</button>
+      <button data-op="61">Join Fleet</button>
+      <button data-op="62" class="stop">Leave Fleet</button>
+    </div>
+    <div class="status" id="fleet-info" style="margin-top:10px">Selected target: Fleet off</div>
+    <div class="k" id="fleet-screen-info" style="margin-top:6px">Screen chip: waiting for status</div>
+    <div class="k" id="fleet-bridge-info">This bridge: waiting for status</div>
+    <div class="k" style="margin-top:6px">Start on one chip (the coordinator), then
+      switch the target above and Join on each other chip. Every node's rows merge
+      into the wardrive CSV. Fleet status follows the selected target above.</div>
+  </div>
+
+  <div class="card">
     <div class="k" style="margin-bottom:8px">Monitor</div>
     <div class="grid" id="cmds-monitor">
       <button data-op="5">Deauth Watch</button>
@@ -194,38 +219,107 @@ const RESULTS = "a0d10000-1234-4a3c-8b21-000000000004"; // notify (Wi-Fi list)
 const OP_SELECT_WIFI = 51;
 const TARGET_OPS = [52,53,54,22,23];  // need a selected network
 const TGT_BRIDGE = 0, TGT_SCREEN = 1;
+const VIEW_NAMES = ["Home","Wi-Fi","Channels","BLE","BLE Detail","Saved","Wi-Fi Audit","Signal","Deauth Watch","Deauth Select","Deauth Attack","Handshake","Clients","Recon","Monitor","Attacks","Beacon Flood","Evil Portal","GPS","Wardrive","Packet Mon","Locator","WPS","Status","Settings","Screen Test","Files","BLE Spam Watch","Probe Lure","Rogue Watch","Hidden SSID","Cameras","Security Audit","Trackers","Harvester","Probe Intel","Karma Watch","Beacon Watch","Auth Flood","Advanced Watch","Link Wardrive","Network","Network Setup","Network Edit","Network APs","Network Results","Network Host","Network Detail"];
+function viewName(id){ return (id!=null && id<VIEW_NAMES.length) ? VIEW_NAMES[id] : (id!=null?("#"+id):"–"); }
 let target = TGT_SCREEN;  // which chip runs the command
 const GPSSD_OPS = [42];  // Files -- screen-chip only (no SD on bridge)
 
 const $ = (id) => document.getElementById(id);
 const log = (m) => { const d=$("log"); d.textContent += (new Date().toLocaleTimeString()+"  "+m+"\n"); d.scrollTop=d.scrollHeight; };
-let device=null, cmdCh=null, statusCh=null, resultsCh=null;
-let nets=new Map(), selIndex=null;
-let wardriveRows=[];
 
-function setConnected(on){
-  $("dot").classList.toggle("on", on);
-  $("state").textContent = on ? "Connected" : "Disconnected";
-  $("connect").textContent = on ? "Disconnect" : "Connect";
+// Several bridges can be connected at once; commands go to the ACTIVE one, but
+// every bridge's wardrive rows merge into one CSV. Each entry:
+//   {id, num, device, cmdCh, statusCh, resultsCh, name, connected,
+//    nets:Map, selIndex, statuses:[bridge,screen], row, mbEl, dotEl}
+let conns = [];
+let activeId = null;
+let connCounter = 0;
+let wardriveRows = [];  // merged across ALL bridges
+
+const activeConn = () => conns.find(c => c.id === activeId) || null;
+
+function anyConnected(){ return conns.some(c => c.connected); }
+
+function setActive(id){
+  activeId = id;
+  const c = activeConn();
+  // Show the active bridge's own Wi-Fi list + status.
+  renderNets(); renderStats(); refreshTargetButtons(); applyTargetGating();
+  renderConns();
+  if (c) log("active bridge = " + c.name);
+}
+
+function updateEnabled(){
+  const on = anyConnected();
   document.querySelectorAll("button[data-op]").forEach(b => b.disabled = !on);
-  if (on) { refreshTargetButtons(); applyTargetGating(); }
-  if (!on){ nets.clear(); selIndex=null; renderNets(); }
+  $("dot").classList.toggle("on", on);
+  const n = conns.filter(c => c.connected).length;
+  $("state").textContent = n ? (n + " bridge" + (n===1?"":"s") + " connected") : "No bridges";
+  if (on){ refreshTargetButtons(); applyTargetGating(); }
 }
 
 function refreshTargetButtons(){
-  const ready = selIndex !== null;
+  const c = activeConn();
+  const ready = c && c.selIndex !== null;
   TARGET_OPS.forEach(op => {
     const b = document.querySelector('#cmds-target button[data-op="'+op+'"]');
-    if (b) b.disabled = !(device?.gatt?.connected) || !ready;
+    if (b) b.disabled = !(c && c.connected) || !ready;
   });
 }
 
+// ---- connection list ----------------------------------------------------
+function connSummary(c){
+  if (!c.connected) return "disconnected";
+  const s = c.statuses[TGT_BRIDGE] || {};
+  let parts = [];
+  if (s.fleetShort) parts.push(s.fleetShort);
+  parts.push("wifi " + (s.wifi ?? "–"));
+  parts.push("ble " + (s.ble ?? "–"));
+  if (s.gpsFix) parts.push("GPS");
+  return parts.join(" · ");
+}
+
+function renderConns(){
+  const box = $("conns");
+  if (!conns.length){
+    box.innerHTML = '<div class="k">No bridges connected. Tap Add ESP; add each ' +
+      "board's orange chip to control them all without reconnecting.</div>";
+    return;
+  }
+  box.innerHTML = "";
+  for (const c of conns){
+    const el = document.createElement("div");
+    el.className = "conn" + (c.id===activeId ? " sel" : "");
+    const dot = document.createElement("span");
+    dot.className = "dot" + (c.connected ? " on" : "");
+    const nm = document.createElement("div");
+    nm.className = "nm";
+    nm.innerHTML = '<div class="ss">'+c.name+(c.id===activeId?' · active':'')+
+      '</div><div class="mb"></div>';
+    const x = document.createElement("button");
+    x.className = "x"; x.textContent = c.connected ? "×" : "retry";
+    x.addEventListener("click", (e) => { e.stopPropagation();
+      c.connected ? disconnectConn(c) : reconnectConn(c); });
+    el.appendChild(dot); el.appendChild(nm); el.appendChild(x);
+    el.addEventListener("click", () => setActive(c.id));
+    box.appendChild(el);
+    c.row = el; c.dotEl = dot; c.mbEl = nm.querySelector(".mb");
+    c.mbEl.textContent = connSummary(c);
+  }
+}
+
+function touchConnRow(c){  // in-place refresh (no full re-render, avoids flicker)
+  if (c.mbEl) c.mbEl.textContent = connSummary(c);
+  if (c.dotEl) c.dotEl.classList.toggle("on", c.connected);
+}
+
+// ---- per-bridge Wi-Fi list ----------------------------------------------
 const AUTH = ["open","WEP","WPA","WPA2","WPA2E","WPA3","WPA2/3","WAPI","OWE"];
-function parseResult(dv){
+function parseResult(dv, c){
   if (dv.byteLength >= 1 && dv.getUint8(0) === 2) {  // wardrive WiGLE CSV row (text)
     let row = "";
     for (let k = 1; k < dv.byteLength; k++) row += String.fromCharCode(dv.getUint8(k));
-    wardriveRows.push(row);
+    wardriveRows.push(row);  // merged across every bridge
     $("wd-count").textContent = "Wardrive: " + wardriveRows.length + " rows";
     return;
   }
@@ -234,18 +328,20 @@ function parseResult(dv){
   const rssi = dv.getInt8(3), ch = dv.getUint8(4), auth = dv.getUint8(5);
   let mac=[]; for (let k=0;k<6;k++) mac.push(dv.getUint8(6+k).toString(16).padStart(2,"0"));
   let ssid=""; for (let k=12;k<dv.byteLength;k++) ssid += String.fromCharCode(dv.getUint8(k));
-  nets.set(i, {i, count, rssi, ch, auth, bssid:mac.join(":"), ssid});
-  renderNets();
+  c.nets.set(i, {i, count, rssi, ch, auth, bssid:mac.join(":"), ssid});
+  if (c.id === activeId) renderNets();
 }
 
 function renderNets(){
   const box = $("netlist");
+  const c = activeConn();
+  const nets = c ? c.nets : new Map();
   if (nets.size === 0){ box.innerHTML = '<div class="k">Run a Wi-Fi Scan to list networks.</div>'; return; }
   const rows = [...nets.values()].sort((a,b)=>a.i-b.i);
   box.innerHTML = "";
   for (const n of rows){
     const el = document.createElement("div");
-    el.className = "net" + (n.i===selIndex ? " sel" : "");
+    el.className = "net" + (n.i===c.selIndex ? " sel" : "");
     el.innerHTML = '<div class="nm"><div class="ss">'+(n.ssid||"&lt;hidden&gt;")+
       '</div><div class="mb">'+n.bssid+'  ch'+n.ch+'  '+(AUTH[n.auth]||n.auth)+'</div></div>'+
       '<div class="rs">'+n.rssi+' dBm</div>';
@@ -255,80 +351,168 @@ function renderNets(){
 }
 
 function selectNet(i){
-  selIndex = i;
+  const c = activeConn(); if (!c) return;
+  c.selIndex = i;
   sendOp(OP_SELECT_WIFI, i);
   renderNets();
   refreshTargetButtons();
 }
 
-setConnected(false);
-
 if (!navigator.bluetooth) $("nobt").hidden = false;
 
-function parseStatus(dv){
-  // Tagged status blob: [source:u8][wifi:u32][ble:u32][toolId:u8]. The initial
-  // characteristic value is the text "ready" (no numbers) -- ignore that.
+// ---- status (per bridge; the active one drives the stat cards) -----------
+function parseStatus(dv, c){
   try {
+    if (dv.byteLength < 1) return;
+    const source = dv.getUint8(0);
+    if (source !== TGT_BRIDGE && source !== TGT_SCREEN) return;
+    if (dv.byteLength === 4 && dv.getUint8(1) === 0xC0){ log("cmd #"+dv.getUint8(2)+" op "+dv.getUint8(3)+" sent"); return; }
+    const s = c.statuses[source] || (c.statuses[source] = {});
+    s.seen = true;
     if (dv.byteLength >= 10){
-      $("wifi").textContent = dv.getUint32(1, true);
-      $("ble").textContent  = dv.getUint32(5, true);
-      $("tool").textContent = "#"+dv.getUint8(9);
+      s.wifi = dv.getUint32(1, true);
+      s.ble  = dv.getUint32(5, true);
+      s.tool = dv.getUint8(9);
     }
-    if (dv.byteLength >= 20){  // GPS tail from the bridge: fix,sats,lat,lon
-      const fix = dv.getUint8(10), sats = dv.getUint8(11);
-      const lat = dv.getFloat32(12, true), lon = dv.getFloat32(16, true);
-      $("gps").textContent = fix
-        ? "GPS: FIX · " + sats + " sats · " + lat.toFixed(5) + ", " + lon.toFixed(5)
-        : "GPS: no fix · " + sats + " sats";
+    if (dv.byteLength >= 20){  // GPS tail: fix,sats,lat,lon
+      s.gpsFix = dv.getUint8(10); s.sats = dv.getUint8(11);
+      s.lat = dv.getFloat32(12, true); s.lon = dv.getFloat32(16, true);
     }
+    if (dv.byteLength >= 25){  // source + fleet tail: active,members,code(u16),role flags
+      s.fleetActive = dv.getUint8(20); s.members = dv.getUint8(21);
+      s.code = dv.getUint16(22, true);
+      const roleFlags = dv.getUint8(24);
+      s.coord = (roleFlags & 0x01) !== 0;
+      s.listening = (roleFlags & 0x02) !== 0;
+      s.fleetRunning = (roleFlags & 0x04) !== 0;
+      s.fleetShort = s.fleetActive
+        ? (s.listening ? "joining" : (s.coord ? "coord " : "member ") +
+          String(s.code).padStart(4,"0") + "/" + s.members)
+        : "";
+    }
+    if (dv.byteLength >= 26){ s.battery = dv.getUint8(25); }
   } catch(e){ /* leave prior values */ }
+  touchConnRow(c);
+  if (c.id === activeId) renderStats();
 }
 
-async function connect(){
+function fleetDescription(s){
+  if (!s || !s.seen) return "waiting for status";
+  if (!s.fleetActive) return "Fleet off";
+  if (s.listening) return "joining — waiting for coordinator";
+  const nodes = s.members + " node" + (s.members===1 ? "" : "s");
+  return (s.coord ? "coordinator" : "member") + " · code " +
+    String(s.code).padStart(4,"0") + " · " + nodes +
+    (s.fleetRunning ? " · logging" : " · ready");
+}
+
+function renderStats(){
+  const c = activeConn();
+  if (!c){ $("wifi").textContent = "–"; $("ble").textContent = "–";
+    $("tool").textContent = "–"; $("gps").textContent = "GPS: –";
+    $("fleet-info").textContent = "Selected target: Fleet off";
+    $("fleet-screen-info").textContent = "Screen chip: waiting for status";
+    $("fleet-bridge-info").textContent = "This bridge: waiting for status";
+    return; }
+  const s = c.statuses[target] || {};
+  $("wifi").textContent = s.wifi ?? "–";
+  $("ble").textContent  = s.ble ?? "–";
+  $("tool").textContent = s.tool!=null ? viewName(s.tool) : "–";
+  $("gps").textContent = s.gpsFix
+    ? "GPS: FIX · " + s.sats + " sats · " + s.lat.toFixed(5) + ", " + s.lon.toFixed(5)
+    : (s.sats!=null ? "GPS: no fix · " + s.sats + " sats" : "GPS: –");
+  $("gps").textContent += (s.battery!=null ? "   ·   Batt: " + s.battery + "%" : "");
+  $("fleet-info").textContent =
+    (target===TGT_SCREEN ? "Selected screen: " : "Selected bridge: ") + fleetDescription(s);
+  $("fleet-screen-info").textContent =
+    "Screen chip: " + fleetDescription(c.statuses[TGT_SCREEN]);
+  $("fleet-bridge-info").textContent =
+    "This bridge: " + fleetDescription(c.statuses[TGT_BRIDGE]);
+}
+
+// ---- connect / add another ----------------------------------------------
+async function wireConn(c){
+  const server = await c.device.gatt.connect();
+  const svc = await server.getPrimaryService(SVC);
+  c.cmdCh = await svc.getCharacteristic(CMD);
+  c.statusCh = await svc.getCharacteristic(STATUS);
+  c.statusCh.addEventListener("characteristicvaluechanged", e => parseStatus(e.target.value, c));
+  await c.statusCh.startNotifications();
+  try { parseStatus(await c.statusCh.readValue(), c); } catch(e){}
+  try {
+    c.resultsCh = await svc.getCharacteristic(RESULTS);
+    c.resultsCh.addEventListener("characteristicvaluechanged", e => parseResult(e.target.value, c));
+    await c.resultsCh.startNotifications();
+  } catch(e){ log("no results characteristic on "+c.name+" (old bridge?)"); }
+  c.connected = true;
+}
+
+async function addEsp(){
   if (!navigator.bluetooth){ log("no Web Bluetooth in this browser"); return; }
   try {
     log("requesting device…");
-    device = await navigator.bluetooth.requestDevice({
+    const device = await navigator.bluetooth.requestDevice({
       filters:[{ services:[SVC] }, { namePrefix:"AxD" }],
       optionalServices:[SVC]
     });
-    device.addEventListener("gattserverdisconnected", onDisc);
-    log("connecting to "+(device.name||"device")+"…");
-    const server = await device.gatt.connect();
-    const svc = await server.getPrimaryService(SVC);
-    cmdCh = await svc.getCharacteristic(CMD);
-    statusCh = await svc.getCharacteristic(STATUS);
-    statusCh.addEventListener("characteristicvaluechanged", e => parseStatus(e.target.value));
-    await statusCh.startNotifications();
-    try { parseStatus(await statusCh.readValue()); } catch(e){}
-    try {
-      resultsCh = await svc.getCharacteristic(RESULTS);
-      resultsCh.addEventListener("characteristicvaluechanged", e => parseResult(e.target.value));
-      await resultsCh.startNotifications();
-    } catch(e){ log("no results characteristic (old bridge?)"); }
-    setConnected(true);
-    log("connected.");
-  } catch(e){ log("connect failed: "+e.message); }
+    let c = conns.find(x => x.id === device.id);
+    if (c){  // already added -> just make sure it's live + active
+      if (!c.connected){ await wireConn(c); }
+      setActive(c.id); updateEnabled(); renderConns();
+      log(c.name + " already added; now active"); return;
+    }
+    c = { id: device.id, num: ++connCounter, device, name: (device.name||"AxD") + " #" + (connCounter),
+          cmdCh:null, statusCh:null, resultsCh:null, connected:false,
+          nets:new Map(), selIndex:null, statuses:[{},{}] };
+    device.addEventListener("gattserverdisconnected", () => onDisc(c));
+    log("connecting to " + c.name + "…");
+    await wireConn(c);
+    conns.push(c);
+    if (activeId === null) activeId = c.id;
+    updateEnabled(); renderConns(); renderNets(); renderStats();
+    log("connected " + c.name + " (" + conns.filter(x=>x.connected).length + " total)");
+  } catch(e){ log("add failed: " + e.message); }
 }
 
-function onDisc(){ setConnected(false); log("disconnected."); }
+async function reconnectConn(c){
+  try { log("reconnecting " + c.name + "…"); await wireConn(c);
+    updateEnabled(); renderConns(); if (c.id===activeId){ renderNets(); renderStats(); }
+    log("reconnected " + c.name); }
+  catch(e){ log("reconnect failed: " + e.message); }
+}
 
-async function disconnect(){ if (device?.gatt?.connected) device.gatt.disconnect(); }
+function onDisc(c){
+  c.connected = false;
+  log(c.name + " disconnected.");
+  touchConnRow(c); updateEnabled(); renderConns();
+  if (c.id === activeId) { renderNets(); renderStats(); }
+}
+
+function disconnectConn(c){
+  try { if (c.device?.gatt?.connected) c.device.gatt.disconnect(); } catch(e){}
+  // Drop it from the list entirely on an explicit ×.
+  conns = conns.filter(x => x.id !== c.id);
+  if (activeId === c.id) activeId = conns.length ? conns[0].id : null;
+  updateEnabled(); renderConns(); renderNets(); renderStats();
+  log("removed " + c.name);
+}
 
 async function sendOp(op, arg=0){
-  if (!cmdCh){ log("not connected"); return; }
-  try { await cmdCh.writeValue(new Uint8Array([op, arg, target]));
-        log("sent op "+op+(arg?(" arg "+arg):"")+" -> "+(target===TGT_BRIDGE?"bridge":"screen")); }
+  const c = activeConn();
+  if (!c || !c.cmdCh || !c.connected){ log("no active bridge"); return; }
+  try { await c.cmdCh.writeValue(new Uint8Array([op, arg, target]));
+        log("["+c.name+"] op "+op+(arg?(" arg "+arg):"")+" -> "+(target===TGT_BRIDGE?"bridge":"screen")); }
   catch(e){ log("send failed: "+e.message); }
 }
 
 function applyTargetGating(){
+  const c = activeConn();
   const bridge = target === TGT_BRIDGE;
   $("tgt-note").hidden = !bridge;
   GPSSD_OPS.forEach(op => {
     document.querySelectorAll('button[data-op="'+op+'"]').forEach(b => {
       b.dataset.gps = "1";
-      b.disabled = !(device?.gatt?.connected) || (bridge);
+      b.disabled = !(c && c.connected) || (bridge);
     });
   });
 }
@@ -337,15 +521,19 @@ document.querySelectorAll('#target-seg button').forEach(b =>
     target = Number(b.dataset.target);
     document.querySelectorAll('#target-seg button').forEach(x =>
       x.classList.toggle("on", x === b));
-    nets.clear(); selIndex = null; renderNets();  // lists are per-chip
+    const c = activeConn();
+    if (c){ c.nets.clear(); c.selIndex = null; }  // lists are per-chip
+    renderNets();
     applyTargetGating();
     log("target = " + (target===TGT_BRIDGE ? "this bridge" : "screen chip"));
   }));
 
+updateEnabled(); renderConns(); renderStats();
+
 async function downloadWardriveCsv(){
   if (!wardriveRows.length){ log("no wardrive rows yet"); return; }
   const header =
-    "WigleWifi_1.4,appRelease=AxD,model=ESP32-C5,release=1.4.3,device=AxD,display=none,board=Dual C5 Bridge,brand=AxD\n" +
+    "WigleWifi_1.4,appRelease=AxD,model=ESP32-C5,release=1.5.0,device=AxD,display=none,board=Dual C5 Bridge,brand=AxD\n" +
     "MAC,SSID,AuthMode,FirstSeen,Channel,RSSI,CurrentLatitude,CurrentLongitude,AltitudeMeters,AccuracyMeters,Type\n";
   const text = header + wardriveRows.join("\n") + "\n";
   const fname = "wardrive-" + Date.now() + ".csv";
@@ -373,7 +561,7 @@ $("wd-save").addEventListener("click", downloadWardriveCsv);
 $("wd-clear").addEventListener("click", () => {
   wardriveRows = []; $("wd-count").textContent = "Wardrive: 0 rows"; log("wardrive rows cleared");
 });
-$("connect").addEventListener("click", () => (device?.gatt?.connected ? disconnect() : connect()));
+$("connect").addEventListener("click", addEsp);
 document.querySelectorAll("button[data-op]").forEach(b =>
   b.addEventListener("click", () => sendOp(Number(b.dataset.op))));
 </script>

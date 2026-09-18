@@ -935,7 +935,7 @@ void linkBroadcastStatus() {
   // [lat f32][lon f32] (source tag prefixed by bridgeNotifyStatus). The app
   // reads the GPS tail when present so the headless bridge's fix shows on-phone.
   // ...then a fleet tail: [active u8][members u8][code u16][coordinator u8].
-  uint8_t blob[24];
+  uint8_t blob[25];
   memcpy(blob + 0, &nets, 4);
   memcpy(blob + 4, &ble, 4);
   blob[8] = view;
@@ -953,6 +953,7 @@ void linkBroadcastStatus() {
   blob[23] = (fleetCoordinator ? 0x01 : 0) |
              (fleetListening && !fleetActive ? 0x02 : 0) |
              (fleetWardriveOn ? 0x04 : 0);
+  blob[24] = static_cast<uint8_t>(batteryPercentNow());
   bridgeNotifyStatus(kSourceBridge, blob, sizeof(blob));
   return;
 #else
@@ -977,6 +978,7 @@ void linkBroadcastStatus() {
   const float lon = gps.location.isValid() ? static_cast<float>(gps.location.lng()) : 0.0f;
   memcpy(&p.sessionId, &lat, sizeof(lat));
   memcpy(&p.masterMillis, &lon, sizeof(lon));
+  p.role = static_cast<uint8_t>(batteryPercentNow());
   esp_now_send(kLinkBroadcastAddr, reinterpret_cast<uint8_t*>(&p), sizeof(p));
 #endif
 }
