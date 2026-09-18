@@ -205,7 +205,7 @@ void updateBatteryBanner() {
 String batteryEstimateString(int& pctOut) {
   int pct = batteryPercentNow();
   pctOut = pct;
-  char buf[8];
+  char buf[12];
   snprintf(buf, sizeof(buf), "%d%%", pct);
   return String(buf);
 }
