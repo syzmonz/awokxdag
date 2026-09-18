@@ -499,7 +499,8 @@ struct DeviceSettingsRecord {
   uint8_t brightnessPercent;    // 20–100
   uint8_t flags;                // kSetting*
   uint16_t batteryCapacityMah;
-  uint8_t reserved[4];
+  uint8_t batteryTunePercent;
+  uint8_t reserved[3];
 };
 static_assert(sizeof(DeviceSettingsRecord) == 20, "NVS settings layout changed");
 constexpr uint32_t kDeviceSettingsVersion = 1;

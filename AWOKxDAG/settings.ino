@@ -13,10 +13,38 @@ const uint16_t kBatteryCapacityOptions[] = {500, 1000, 1500, 2000, 2500,
 constexpr int kBatteryCapacityOptionCount = static_cast<int>(
     sizeof(kBatteryCapacityOptions) / sizeof(kBatteryCapacityOptions[0]));
 constexpr uint16_t kBatteryCapacityDefaultMah = 2000;
+const uint8_t kBatteryTuneOptions[] = {50, 60, 70, 80, 90, 100,
+                                       110, 120, 130, 140, 150};
+constexpr int kBatteryTuneOptionCount = static_cast<int>(
+    sizeof(kBatteryTuneOptions) / sizeof(kBatteryTuneOptions[0]));
+constexpr uint8_t kBatteryTuneDefault = 100;
 constexpr int kSettingsRow0 = 48;
-constexpr int kSettingsRowH = 26;
-constexpr int kSettingsPitch = 28;
-constexpr int kSettingsRows = 8;
+constexpr int kSettingsRowH = 28;
+constexpr int kSettingsPitch = 30;
+constexpr int kSettingsPageCount = 2;
+int settingsPage = 0;
+
+enum SettingItem : uint8_t {
+  kItemBright, kItemGps, kItemSplash, kItemActive, kItemNmea,
+  kItemSleep, kItemScreenTest, kItemCapacity, kItemTune
+};
+const uint8_t kSettingsPage0[] = {kItemBright, kItemGps, kItemSplash,
+                                 kItemActive, kItemNmea};
+const uint8_t kSettingsPage1[] = {kItemSleep, kItemScreenTest,
+                                 kItemCapacity, kItemTune};
+constexpr int kSettingsPage0Count =
+    static_cast<int>(sizeof(kSettingsPage0) / sizeof(kSettingsPage0[0]));
+constexpr int kSettingsPage1Count =
+    static_cast<int>(sizeof(kSettingsPage1) / sizeof(kSettingsPage1[0]));
+
+const uint8_t* settingsPageItems(int page, int& count) {
+  if (page == 1) {
+    count = kSettingsPage1Count;
+    return kSettingsPage1;
+  }
+  count = kSettingsPage0Count;
+  return kSettingsPage0;
+}
 char attackConfirmLabel[24] = {};
 uint32_t attackConfirmMs = 0;
 
@@ -78,6 +106,7 @@ void deviceSettingsDefaults(DeviceSettingsRecord& out) {
   out.backlightTimeoutMs = 0;
   out.brightnessPercent = 100;
   out.batteryCapacityMah = kBatteryCapacityDefaultMah;
+  out.batteryTunePercent = kBatteryTuneDefault;
 }
 
 void writeBacklightPercent(int percent) {
@@ -175,6 +204,11 @@ void loadDeviceSettings() {
     if (kBatteryCapacityOptions[i] == loaded.batteryCapacityMah) capOk = true;
   }
   if (!capOk) loaded.batteryCapacityMah = kBatteryCapacityDefaultMah;
+  bool tuneOk = false;
+  for (int i = 0; i < kBatteryTuneOptionCount; ++i) {
+    if (kBatteryTuneOptions[i] == loaded.batteryTunePercent) tuneOk = true;
+  }
+  if (!tuneOk) loaded.batteryTunePercent = kBatteryTuneDefault;
   deviceSettings = loaded;
   gpsRawEcho = settingFlag(kSettingNmeaEcho);
   Serial.printf("[settings] baud=%lu timeout=%lums brightness=%u%% flags=0x%02x\n",
@@ -199,24 +233,26 @@ void toggleSettingFlag(uint8_t bit) {
   saveDeviceSettings();
 }
 
-String settingsRowLabel(int row) {
-  switch (row) {
-    case 0:
+String settingsItemLabel(uint8_t item) {
+  switch (item) {
+    case kItemSleep:
       return String("Sleep  ") +
              backlightTimeoutLabel(deviceSettings.backlightTimeoutMs);
-    case 1:
+    case kItemBright:
       return "Bright  " + String(deviceSettings.brightnessPercent) + "%";
-    case 2:
+    case kItemGps:
       return "GPS  " + String(deviceSettings.gpsBaud);
-    case 3:
+    case kItemSplash:
       return settingFlag(kSettingSkipSplash) ? "Splash  Off" : "Splash  On";
-    case 4:
+    case kItemActive:
       return settingFlag(kSettingConfirmAttacks) ? "Active  Confirm"
                                                  : "Active  Instant";
-    case 5:
+    case kItemNmea:
       return settingFlag(kSettingNmeaEcho) ? "NMEA  On" : "NMEA  Off";
-    case 6:
+    case kItemCapacity:
       return "Batt  " + String(deviceSettings.batteryCapacityMah) + "mAh";
+    case kItemTune:
+      return "Batt Tune  " + String(deviceSettings.batteryTunePercent) + "%";
     default:
       return "Screen test";
   }
@@ -266,63 +302,70 @@ void cycleBatteryCapacity() {
   saveDeviceSettings();
 }
 
+void cycleBatteryTune() {
+  int index = 0;
+  for (int i = 0; i < kBatteryTuneOptionCount; ++i) {
+    if (kBatteryTuneOptions[i] == deviceSettings.batteryTunePercent) {
+      index = i;
+      break;
+    }
+  }
+  deviceSettings.batteryTunePercent =
+      kBatteryTuneOptions[(index + 1) % kBatteryTuneOptionCount];
+  saveDeviceSettings();
+}
+
+void handleSettingsItem(uint8_t item) {
+  switch (item) {
+    case kItemSleep: cycleBacklightTimeout(); drawSettings(); break;
+    case kItemBright: cycleBrightness(); drawSettings(); break;
+    case kItemGps: cycleGpsBaud(); drawSettings(); break;
+    case kItemSplash: toggleSettingFlag(kSettingSkipSplash); drawSettings(); break;
+    case kItemActive: toggleSettingFlag(kSettingConfirmAttacks); drawSettings(); break;
+    case kItemNmea: toggleSettingFlag(kSettingNmeaEcho); drawSettings(); break;
+    case kItemCapacity: cycleBatteryCapacity(); drawSettings(); break;
+    case kItemTune: cycleBatteryTune(); drawSettings(); break;
+    default: startScreenTest(); break;
+  }
+}
+
 void drawSettings() {
   currentView = View::kSettings;
   display.fillScreen(kBackground);
-  drawHeader("SETTINGS", lastSettingsWriteOk ? "stored on this device"
-                                             : "save failed; RAM only");
-  for (int row = 0; row < kSettingsRows; ++row) {
+  String detail = String(settingsPage + 1) + "/" + String(kSettingsPageCount) +
+                  (lastSettingsWriteOk ? "  stored" : "  RAM only");
+  drawHeader("SETTINGS", detail);
+  int count = 0;
+  const uint8_t* items = settingsPageItems(settingsPage, count);
+  for (int row = 0; row < count; ++row) {
     drawSmallButton(20, kSettingsRow0 + row * kSettingsPitch, 200, kSettingsRowH,
-                    settingsRowLabel(row), kAccent);
+                    settingsItemLabel(items[row]), kAccent);
   }
-  drawFooter("Back", "Defaults");
+  drawFourButtonFooter("Back", "<", ">", "Defaults");
 }
 
 void handleSettingsTouch(int x, int y) {
   if (y >= kFooterTop) {
-    if (x < kScreenWidth / 2) {
+    if (x < 60) {
       drawStatus();
+    } else if (x < 120) {
+      settingsPage = (settingsPage + kSettingsPageCount - 1) % kSettingsPageCount;
+      drawSettings();
+    } else if (x < 180) {
+      settingsPage = (settingsPage + 1) % kSettingsPageCount;
+      drawSettings();
     } else {
       resetDeviceSettings();
+      settingsPage = 0;
       drawSettings();
     }
     return;
   }
   if (y < kSettingsRow0) return;
   const int row = (y - kSettingsRow0) / kSettingsPitch;
-  if (row < 0 || row >= kSettingsRows) return;
   if ((y - kSettingsRow0) % kSettingsPitch >= kSettingsRowH) return;
-  switch (row) {
-    case 0:
-      cycleBacklightTimeout();
-      drawSettings();
-      break;
-    case 1:
-      cycleBrightness();
-      drawSettings();
-      break;
-    case 2:
-      cycleGpsBaud();
-      drawSettings();
-      break;
-    case 3:
-      toggleSettingFlag(kSettingSkipSplash);
-      drawSettings();
-      break;
-    case 4:
-      toggleSettingFlag(kSettingConfirmAttacks);
-      drawSettings();
-      break;
-    case 5:
-      toggleSettingFlag(kSettingNmeaEcho);
-      drawSettings();
-      break;
-    case 6:
-      cycleBatteryCapacity();
-      drawSettings();
-      break;
-    default:
-      startScreenTest();
-      break;
-  }
+  int count = 0;
+  const uint8_t* items = settingsPageItems(settingsPage, count);
+  if (row < 0 || row >= count) return;
+  handleSettingsItem(items[row]);
 }

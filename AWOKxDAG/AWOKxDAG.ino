@@ -2300,6 +2300,7 @@ void loop() {
   // Mini screen test writes the ST7735 directly, so skip the canvas blit there.
   if (currentView != View::kScreenTest) display.present();
 #else
+  updateBatteryBanner();
   display.present();  // dirty-gated: only blits when a view actually redrew
 #endif
   delay(10);
