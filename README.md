@@ -1,16 +1,15 @@
 # AxD
 
+# ALL CREDITS BELONG TO DAGNAZTY. THIS IS NOT MY FIRMWARE. PLEASE SEE ORIGINAL AT https://github.com/dagnazty/awokxdag
+
 **Dual-band Wi-Fi / BLE penetration-testing toolkit for the ESP32-C5** (AWOK Dual
 C5, white-USB screen board with an ILI9341 touchscreen).
 
-- **Version:** 1.4.4
-- **Author:** dag nazty
+- **Version:** 1.4.5.3
+- **Author:** dag nazty - syzmonz custom settings.
 - **Target:** ESP32-C5 Dev Module, 8 MB flash, PSRAM, microSD
 - **Changelog:** [CHANGELOG.md](CHANGELOG.md)
 
-Experimental **original Dual ESP32 Touch v1/v2/v3** profiles are also available (2.4 GHz only).
-
-Original **Dual ESP32 Mini v1/v2/v3** builds are available as well.
 
 > ## Authorized use only
 > This firmware transmits and disrupts networks (deauthentication, beacon
