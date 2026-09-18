@@ -27,37 +27,7 @@ jobs:
             define: AWOK_DUAL_C5_TOUCH
             label: "Dual C5 Touch"
             fqbn: "esp32:esp32:esp32c5:FlashSize=8M,PartitionScheme=default_8MB,PSRAM=enabled"
-          - variant: mini
-            define: AWOK_DUAL_C5_MINI
-            label: "Dual C5 Mini"
-            fqbn: "esp32:esp32:esp32c5:FlashSize=8M,PartitionScheme=default_8MB,PSRAM=enabled"
-          - variant: esp32-touch-v1
-            define: AWOK_DUAL_ESP32_TOUCH_V1
-            label: "Dual ESP32 Touch v1"
-            fqbn: "esp32:esp32:esp32:FlashSize=4M,PartitionScheme=huge_app,PSRAM=disabled"
-          - variant: esp32-touch-v2
-            define: AWOK_DUAL_ESP32_TOUCH_V2
-            label: "Dual ESP32 Touch v2"
-            fqbn: "esp32:esp32:esp32:FlashSize=4M,PartitionScheme=huge_app,PSRAM=disabled"
-          - variant: esp32-touch-v3
-            define: AWOK_DUAL_ESP32_TOUCH_V3
-            label: "Dual ESP32 Touch v3"
-            fqbn: "esp32:esp32:esp32:FlashSize=4M,PartitionScheme=huge_app,PSRAM=disabled"
-          - variant: esp32-mini-v1
-            define: AWOK_DUAL_ESP32_MINI_V1
-            label: "Dual ESP32 Mini v1"
-            fqbn: "esp32:esp32:esp32:FlashSize=4M,PartitionScheme=huge_app,PSRAM=disabled"
-          - variant: esp32-mini-v2
-            define: AWOK_DUAL_ESP32_MINI_V2
-            label: "Dual ESP32 Mini v2"
-            fqbn: "esp32:esp32:esp32:FlashSize=4M,PartitionScheme=huge_app,PSRAM=disabled"
-          - variant: esp32-mini-v3
-            define: AWOK_DUAL_ESP32_MINI_V3
-            label: "Dual ESP32 Mini v3"
-            fqbn: "esp32:esp32:esp32:FlashSize=4M,PartitionScheme=huge_app,PSRAM=disabled"
-          - variant: bridge
-            label: "Dual C5 Bridge (headless BLE<->ESP-NOW)"
-            board: dual-c5-bridge
+
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -177,20 +147,14 @@ jobs:
           name: AWOKxDAG v${{ inputs.version }}
           prerelease: ${{ inputs.prerelease }}
           body: |
-            AWOKxDAG v${{ inputs.version }} — ESP32-C5 and original ESP32 firmware.
-
-            - **Dual C5 Touch / Mini** — prefixes `awokxdag-touch-…` / `awokxdag-mini-…`
-            - **Original Dual ESP32 Touch v1/v2/v3** (experimental) — `awokxdag-esp32-touch-v<revision>-…`
-            - **Original Dual ESP32 Mini v1/v2/v3** (experimental) — `awokxdag-esp32-mini-v<revision>-…`
-
-            Original ESP32 builds support 2.4 GHz only, 32-entry result tables,
-            and separate Wi-Fi/BLE operation. See the board port documentation
-            for physical validation status. C5 Mini retains PSRAM-backed tables
-            and memory-checked dual-radio operation.
-
-            Write your board's merged image at `0x0`. Select `--chip esp32` for
-            original boards or `--chip esp32c5` for C5. For component images,
-            bootloader offsets are `0x1000` (ESP32) / `0x2000` (C5); partitions
-            `0x8000`, boot_app0 `0xe000`, app `0x10000`. Verify SHA256SUMS and keep
-            a backup before installing.
+           # This is not my firmware. All credits belong to dagnazty. Please find the original firmware here; [https://github.com/dagnazty/awokxdag](https://github.com/dagnazty/awokxdag)
+           ## This build only supports AWOK Dual C5 Touch, please do not flash for any other boards. - See info at [README.md](https://github.com/syzmonz/awokxdag/blob/main/README.md)
+           AWOKxDAG v${{ inputs.version }} — ESP32-C5
+           
+           - **Dual C5 Touch** — prefixes `awokxdag-touch-…` 
+           
+           Write your board's merged image at `0x0`. Select `--chip esp32c5` for C5. For component images,
+           bootloader offsets are `0x2000` (C5); partitions. 
+           `0x8000`, boot_app0 `0xe000`, app `0x10000`. Verify SHA256SUMS and keep
+           a backup before installing.
           files: release/*
