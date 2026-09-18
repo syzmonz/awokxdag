@@ -2,6 +2,9 @@
 
 # ALL CREDITS BELONG TO DAGNAZTY. THIS IS NOT MY FIRMWARE. PLEASE SEE ORIGINAL AT https://github.com/dagnazty/awokxdag
 
+### Battery Capacity Info: This version of AxD is currently built against 1.4.4, it includes battery settings & info that I personally needed.
+### Please read documentation at [BattInfo.MD](BattInfo.md)
+
 **Dual-band Wi-Fi / BLE penetration-testing toolkit for the ESP32-C5** (AWOK Dual
 C5, white-USB screen board with an ILI9341 touchscreen).
 
@@ -9,8 +12,6 @@ C5, white-USB screen board with an ILI9341 touchscreen).
 - **Author:** dag nazty - syzmonz custom settings.
 - **Target:** ESP32-C5 Dev Module, 8 MB flash, PSRAM, microSD
 - **Changelog:** [CHANGELOG.md](CHANGELOG.md)
-
-- **Battery Capacity Info:** This version of AxD is currently built against 1.4.4, it includes battery settings & info that I personally needed.
 
 
 > ## Authorized use only
