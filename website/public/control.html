@@ -110,10 +110,13 @@
   <div class="card">
     <div class="row" style="margin-bottom:8px">
       <span class="k" style="flex:1">Networks — tap a Wi-Fi Scan result to select</span>
+      <button id="pgprev" title="previous view">◀</button>
+      <button id="pgnext" title="next view">▶</button>
       <button data-op="1">Scan</button>
       <button data-op="50">Refresh</button>
     </div>
     <div id="netlist"><div class="k">Run a Wi-Fi Scan to list networks.</div></div>
+    <div id="statuspanel" hidden></div>
     <div class="k" style="margin:10px 0 6px; color:var(--bad)">
       Selected-target actions — authorized targets only</div>
     <div class="grid" id="cmds-target">
@@ -246,6 +249,31 @@ let connCounter = 0;
 let wardriveRows = [];  // merged across ALL bridges
 
 const activeConn = () => conns.find(c => c.id === activeId) || null;
+const IDLE_TOOLS = new Set([0,23,24,26]);
+function toolActive(){ const c=activeConn(); const s=c?c.statuses[target]:null; return !!(s && s.tool!=null && !IDLE_TOOLS.has(s.tool)); }
+let resultsPage = 0;
+function setPage(p){ resultsPage=(p+2)%2; const nl=document.getElementById("netlist"), sp=document.getElementById("statuspanel"); if(nl) nl.hidden = resultsPage!==0; if(sp) sp.hidden = resultsPage!==1; if(resultsPage===1) renderStatusPanel(); }
+function renderStatusPanel(){
+  const box=document.getElementById("statuspanel"); if(!box) return;
+  const c=activeConn(); const s=c?c.statuses[target]:null;
+  if(!s){ box.innerHTML='<div class="k">No status yet \u2014 waiting for the chip.</div>'; return; }
+  const age = s.ms ? Math.round((Date.now()-s.ms)/1000) : null;
+  const stale = age!=null && age>4;
+  const state = busyPending ? "Working\u2026" : (toolActive() ? "running" : "idle");
+  box.innerHTML =
+    '<div class="net"><div><b>'+viewName(s.tool)+'</b><div class="k">'+state+'</div></div>'+
+    '<div class="k" style="color:'+(stale?"var(--bad)":"inherit")+'">'+(age!=null?age+"s ago":"\u2013")+'</div></div>'+
+    '<div class="k" style="margin-top:8px">Wi-Fi: '+(s.wifi!=null?s.wifi:"\u2013")+'   \u00b7   BLE: '+(s.ble!=null?s.ble:"\u2013")+(s.battery!=null?"   \u00b7   Batt: "+s.battery+"%":"")+'</div>'+
+    '<div class="k">'+(s.gpsFix?"GPS: FIX \u00b7 "+s.sats+" sats":(s.sats!=null?"GPS: no fix \u00b7 "+s.sats+" sats":"GPS: \u2013"))+'</div>'+
+    (s.fleetShort?'<div class="k">Fleet: '+s.fleetShort+'</div>':"")+
+    (stale?'<div class="k" style="color:var(--bad);margin-top:6px">No update in '+age+'s \u2014 link may have dropped</div>':"");
+}
+setInterval(()=>{ if(resultsPage===1) renderStatusPanel(); }, 1000);
+document.addEventListener("DOMContentLoaded",()=>{
+  const pv=document.getElementById("pgprev"), nx=document.getElementById("pgnext");
+  if(pv) pv.addEventListener("click",()=>setPage(resultsPage-1));
+  if(nx) nx.addEventListener("click",()=>setPage(resultsPage+1));
+});
 
 function anyConnected(){ return conns.some(c => c.connected); }
 
@@ -396,6 +424,7 @@ function parseStatus(dv, c){
     if (source !== TGT_BRIDGE && source !== TGT_SCREEN) return;
     if (dv.byteLength === 4 && dv.getUint8(1) === 0xC0){ log("cmd #"+dv.getUint8(2)+" op "+dv.getUint8(3)+" sent"); return; }
     const s = c.statuses[source] || (c.statuses[source] = {});
+    s.ms = Date.now();
     s.seen = true;
     if (dv.byteLength >= 10){
       s.wifi = dv.getUint32(1, true);
@@ -594,6 +623,7 @@ const CLEAR_ON_OP = new Set([1,2,3,4,5,6,10,11,12,13,14,15,16,17,30,31,32,33,34,
 document.querySelectorAll("button[data-op]").forEach(b =>
   b.addEventListener("click", () => {
     const op = Number(b.dataset.op);
+    if (op !== 255 && op !== 50 && (busyPending || toolActive())){ log("running \u2014 Stop/Home first"); return; }
     if (op === 50){ const c = activeConn(); if (c){ c.nets.clear(); if (c.bleNets) c.bleNets.clear(); c.selIndex = null; } renderNets(); log("list cleared"); return; }
     if (CLEAR_ON_OP.has(op)){ const c = activeConn(); if (c){ c.nets.clear(); if (c.bleNets) c.bleNets.clear(); c.selIndex = null; } renderNets(); }
     const label = (b.textContent || ("op " + op)).trim();
