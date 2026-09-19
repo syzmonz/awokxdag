@@ -1364,6 +1364,9 @@ void updateLink() {
     }
     if (now - lastRemoteStatusMs >= 1000) {
       lastRemoteStatusMs = now;
+      if (toolBlocksSerialShortcuts() && !scanInProgress && !wifiScanContinuous) {
+        esp_wifi_set_channel(kLinkChannel, WIFI_SECOND_CHAN_NONE);
+      }
       linkBroadcastStatus();
     }
     return;
