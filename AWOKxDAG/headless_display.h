@@ -1,5 +1,5 @@
 #pragma once
-// No-op display for the headless orange bridge chip (AWOK_DUAL_C5_BRIDGE).
+// No-op display for headless C5 and classic ESP32 bridge profiles.
 //
 // The bridge runs the full firmware but has no screen -- it is driven entirely
 // over BLE and reports through BLE notifications / serial. Every existing

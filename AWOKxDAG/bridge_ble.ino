@@ -1,6 +1,6 @@
 // bridge_ble.ino — BLE GATT server for the headless orange bridge chip.
 //
-// Compiled ONLY under AWOK_HEADLESS (the AWOK_DUAL_C5_BRIDGE profile). The bridge
+// Compiled ONLY under AWOK_HEADLESS (C5 or classic ESP32 bridge profiles). The bridge
 // runs the same full firmware as the white chip, but with no screen; the phone
 // drives it directly over BLE. Each command carries a target byte:
 //   kTargetBridge -> run the tool locally on this chip (linkDispatchCommand)
@@ -54,11 +54,13 @@ static void bridgeRelayToScreen(uint8_t op, uint8_t arg) {
       esp_now_send(kLinkBroadcastAddr, reinterpret_cast<uint8_t*>(&p), sizeof(p));
       delay(kBridgeChanDwellMs);
     }
+#ifndef AWOK_CLASSIC_ESP32
     for (int i = 0; i < kLink5ChannelCount; ++i) {
       esp_wifi_set_channel(kLink5Channels[i], WIFI_SECOND_CHAN_NONE);
       esp_now_send(kLinkBroadcastAddr, reinterpret_cast<uint8_t*>(&p), sizeof(p));
       delay(kBridgeChanDwellMs);
     }
+#endif
   }
   esp_wifi_set_channel(kLinkChannel, WIFI_SECOND_CHAN_NONE);  // home for telem
 }

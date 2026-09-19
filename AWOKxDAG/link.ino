@@ -162,7 +162,7 @@ void fleetOnAckFrame(const uint8_t* data) {
 }
 
 uint8_t fleetLocalCaps() {
-  uint8_t c = kFleetCapBle;  // every C5 can scan BLE
+  uint8_t c = kFleetCapBle;  // every supported AxD board can scan BLE
   if (AwokPins::kDualBand) c |= kFleetCapDualBand;
   c |= kFleetCapGps;         // GPS is wired on the C5 boards
   if (sdReady) c |= kFleetCapSd;
@@ -175,15 +175,44 @@ int fleetIndexOfMac(const uint8_t* mac) {
   return -1;
 }
 
-// Coordinator: choose the BLE node (prefer a non-coordinator) and the SD sink.
+// Choose exactly one BLE-only node while preserving the widest Wi-Fi coverage.
 void fleetDealRoster() {
+  const int previousBleNodeIndex = fleetBleNodeIndex;
   fleetBleNodeIndex = -1;
-  for (int i = 0; i < fleetMemberCount; ++i)
-    if (i != fleetCoordIndex && (fleetMembers[i].caps & kFleetCapBle)) {
-      fleetBleNodeIndex = i; break;
-    }
+  int dualCount = 0, classicCount = 0;
+  for (int i = 0; i < fleetMemberCount; ++i) {
+    if (fleetMembers[i].caps & kFleetCapDualBand) ++dualCount;
+    else ++classicCount;
+  }
+  // Never consume the only C5 in a mixed fleet: it is the only 5 GHz radio.
+  if (dualCount == 1 && classicCount > 0) {
+    for (int pass = 0; pass < 2 && fleetBleNodeIndex < 0; ++pass)
+      for (int i = 0; i < fleetMemberCount; ++i)
+        if ((pass == 1 || i != fleetCoordIndex) &&
+            !(fleetMembers[i].caps & kFleetCapDualBand) &&
+            (fleetMembers[i].caps & kFleetCapBle)) {
+          fleetBleNodeIndex = i; break;
+        }
+  }
+  // Otherwise use a spare C5 first so classic/WROOM boards retain 2.4 GHz
+  // precedence, then any non-coordinator BLE-capable member.
+  if (fleetBleNodeIndex < 0 && dualCount > 1)
+    for (int i = 0; i < fleetMemberCount; ++i)
+      if (i != fleetCoordIndex && (fleetMembers[i].caps & kFleetCapDualBand) &&
+          (fleetMembers[i].caps & kFleetCapBle)) {
+        fleetBleNodeIndex = i; break;
+      }
+  if (fleetBleNodeIndex < 0)
+    for (int i = 0; i < fleetMemberCount; ++i)
+      if (i != fleetCoordIndex && (fleetMembers[i].caps & kFleetCapBle)) {
+        fleetBleNodeIndex = i; break;
+      }
   if (fleetBleNodeIndex < 0 && (fleetMembers[fleetCoordIndex].caps & kFleetCapBle))
     fleetBleNodeIndex = fleetCoordIndex;
+  if (linkWardriveActive && previousBleNodeIndex == fleetMyIndex &&
+      fleetBleNodeIndex != fleetMyIndex)
+    fleetStopBleScanOnly();
+  linkChannelCursor = 0;
   fleetSinkIndex = -1;
   for (int i = 0; i < fleetMemberCount; ++i)
     if (fleetMembers[i].caps & kFleetCapSd) { fleetSinkIndex = i; break; }
@@ -327,6 +356,7 @@ void fleetApplyRoster(const FleetRoster& r) {
     return;
   }
 
+  const bool wasBleNode = fleetImBleNode();
   fleetCode = r.code;
   fleetMemberCount = r.memberCount;
   for (int i = 0; i < fleetMemberCount; ++i) {
@@ -338,10 +368,13 @@ void fleetApplyRoster(const FleetRoster& r) {
   fleetBleNodeIndex = r.bleNodeIndex == 0xFF ? -1 : r.bleNodeIndex;
   fleetSinkIndex = r.sinkNodeIndex == 0xFF ? -1 : r.sinkNodeIndex;
   fleetMyIndex = myIndex;
+  if (linkWardriveActive && wasBleNode && !fleetImBleNode())
+    fleetStopBleScanOnly();
+  linkChannelCursor = 0;
   Serial.printf("[fleet] roster N=%d myIndex=%d role=%s wifiSlice=%d/%d coord=%d\n",
                 fleetMemberCount, fleetMyIndex,
                 fleetImBleNode() ? "BLE" : "WIFI",
-                fleetMyWifiSlice(), fleetWifiWorkerCount(), fleetCoordIndex);
+                fleetMyWifiSlice(), fleetMyWifiWorkerCount(), fleetCoordIndex);
   fleetWardriveOn = r.wardriveOn != 0;
   if (fleetWardriveOn && !linkWardriveActive) {
     startLinkWardrive();          // join the drive in progress
@@ -358,10 +391,33 @@ int fleetWifiWorkerCount() {
     if (i != fleetBleNodeIndex) ++n;
   return n < 1 ? 1 : n;
 }
+bool fleetHasClassicWifiWorker() {
+  for (int i = 0; i < fleetMemberCount; ++i)
+    if (i != fleetBleNodeIndex &&
+        !(fleetMembers[i].caps & kFleetCapDualBand)) return true;
+  return false;
+}
+
+int fleetMyWifiWorkerCount() {
+  const bool mineDual = AwokPins::kDualBand;
+  const bool splitByBand = fleetHasClassicWifiWorker();
+  int n = 0;
+  for (int i = 0; i < fleetMemberCount; ++i) {
+    if (i == fleetBleNodeIndex) continue;
+    const bool memberDual = (fleetMembers[i].caps & kFleetCapDualBand) != 0;
+    if (!splitByBand || memberDual == mineDual) ++n;
+  }
+  return n < 1 ? 1 : n;
+}
+
 int fleetMyWifiSlice() {
+  const bool mineDual = AwokPins::kDualBand;
+  const bool splitByBand = fleetHasClassicWifiWorker();
   int rank = 0;
   for (int i = 0; i < fleetMemberCount; ++i) {
     if (i == fleetBleNodeIndex) continue;
+    const bool memberDual = (fleetMembers[i].caps & kFleetCapDualBand) != 0;
+    if (splitByBand && memberDual != mineDual) continue;
     if (i == fleetMyIndex) return rank;
     ++rank;
   }
@@ -500,6 +556,7 @@ void fleetStartWardrive() {
 // coordinator in the rendezvous window. It parks on the link channel since it
 // never Wi-Fi-hops.
 void fleetBleNodeStart() {
+  WiFi.scanDelete();
   esp_wifi_set_channel(kLinkChannel, WIFI_SECOND_CHAN_NONE);
   if (!ensureBleReady(true)) return;  // BLE up; keep Wi-Fi/ESP-NOW resident
   NimBLEScan* scan = NimBLEDevice::getScan();
@@ -509,13 +566,17 @@ void fleetBleNodeStart() {
   Serial.println("[fleet] BLE node scanning");
 }
 
-void fleetStopLocal() {
-  linkWardriveActive = false;
+void fleetStopBleScanOnly() {
   if (fleetBleScanRunning) {
     NimBLEScan* scan = NimBLEDevice::getScan();
     if (scan) { scan->stop(); scan->clearResults(); }
     fleetBleScanRunning = false;
   }
+}
+
+void fleetStopLocal() {
+  linkWardriveActive = false;
+  fleetStopBleScanOnly();
 }
 
 // Coordinator: stop the fleet wardrive but keep the session up (members stop via
@@ -1154,20 +1215,31 @@ bool linkAssignedPlan(LinkPlan& plan) {
   return true;
 }
 
+void fleetAssignedPlan(LinkPlan& plan) {
+  if (!AwokPins::kDualBand) {
+    plan = kLinkPlan24;
+  } else {
+    // WROOM/classic workers own 2.4 GHz whenever present; C5 workers then own
+    // and evenly split 5 GHz. An all-C5 fleet evenly splits the full plan.
+    plan = fleetHasClassicWifiWorker() ? kLinkPlan5 : kLinkPlanFull;
+  }
+}
+
 // Denominator shown on the Split Wardrive screen: this unit's set size.
 int linkPlanCount() {
   LinkPlan plan;
-  linkAssignedPlan(plan);
+  if (fleetActive) fleetAssignedPlan(plan); else linkAssignedPlan(plan);
   return linkPlanSize(plan);
 }
 
 uint8_t linkNextAssignedChannel() {
   LinkPlan plan;
-  const bool dealPair = linkAssignedPlan(plan);
+  const bool dealPair = fleetActive ? false : linkAssignedPlan(plan);
+  if (fleetActive) fleetAssignedPlan(plan);
   const int count = linkPlanSize(plan);
   int m = 1, slice = 0;  // deal the plan m ways; take slice `slice`
   if (fleetActive) {
-    m = fleetWifiWorkerCount();
+    m = fleetMyWifiWorkerCount();
     slice = fleetMyWifiSlice();
   } else if (dealPair) {
     m = 2;
@@ -1183,11 +1255,12 @@ uint8_t linkNextAssignedChannel() {
 
 int linkAssignedChannelCount() {
   LinkPlan plan;
-  const bool dealPair = linkAssignedPlan(plan);
+  const bool dealPair = fleetActive ? false : linkAssignedPlan(plan);
+  if (fleetActive) fleetAssignedPlan(plan);
   const int count = linkPlanSize(plan);
   int m = 1, slice = 0;
   if (fleetActive) {
-    m = fleetWifiWorkerCount();
+    m = fleetMyWifiWorkerCount();
     slice = fleetMyWifiSlice();
   } else if (dealPair) {
     m = 2;
@@ -1400,8 +1473,10 @@ void openLinkWardrive() {
 // Human-readable role for a member row on the fleet screen.
 static const char* fleetRoleLabel(int idx) {
   if (idx == fleetBleNodeIndex) return "BLE";
-  if (idx == fleetCoordIndex) return "coord";
-  return "wifi";
+  const bool dual = (fleetMembers[idx].caps & kFleetCapDualBand) != 0;
+  if (idx == fleetCoordIndex)
+    return dual ? (fleetHasClassicWifiWorker() ? "c5G" : "cALL") : "c2.4";
+  return dual ? (fleetHasClassicWifiWorker() ? "5GHz" : "dual") : "2.4G";
 }
 
 // Fleet entry menu (no session yet): choose Start (become coordinator) or Join.
@@ -1416,7 +1491,7 @@ void drawFleetMenu() {
   display.setTextSize(1);
   display.setTextColor(ILI9341_WHITE, kBackground);
   display.setCursor(6, 88);
-  display.print("Link several C5 chips to split");
+  display.print("Link several AxD chips to split");
   display.setCursor(6, 100);
   display.print("the channels into ONE merged CSV.");
   display.setTextColor(kMuted, kBackground);

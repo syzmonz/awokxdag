@@ -154,19 +154,21 @@ void wardriveAddMac(const uint8_t* mac) {
   memcpy(wardriveMacs[wardriveMacCount++], mac, 6);
 }
 
-// Open a FRESH CSV for this wardrive run: /awokxdag/wardrive-NNN.csv, using the
+// Open a FRESH CSV for this wardrive run: /awokxdag/wardrive-NNNN.csv, using the
 // first index not already on the card, so every Start (solo, link, or fleet)
 // writes a new file instead of appending to one growing log.
 bool openWardriveCsv() {
   if (!ensureSdCard()) return false;
   g_wardriveCsvPath = "";
-  for (int n = 1; n <= 999; ++n) {
+  for (int n = 1; n <= 9999; ++n) {
     char buf[48];
-    snprintf(buf, sizeof(buf), "%s/wardrive-%03d.csv", kSdDirectory, n);
+    snprintf(buf, sizeof(buf), "%s/wardrive-%04d.csv", kSdDirectory, n);
     if (!SD.exists(buf)) { g_wardriveCsvPath = String(buf); break; }
   }
-  if (g_wardriveCsvPath.length() == 0)  // 999 files already: reuse the legacy name
-    g_wardriveCsvPath = String(kWardriveCsvPath);
+  if (g_wardriveCsvPath.length() == 0) {
+    Serial.println("[wardrive] no free session filename (0001-9999)");
+    return false;
+  }
   File file = SD.open(g_wardriveCsvPath.c_str(), FILE_WRITE);
   if (!file) {
     sdReady = false;

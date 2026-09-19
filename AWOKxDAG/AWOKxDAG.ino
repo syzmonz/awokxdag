@@ -4,7 +4,13 @@
     !defined(AWOK_DUAL_ESP32_TOUCH_V1) && !defined(AWOK_DUAL_ESP32_TOUCH_V2) && \
     !defined(AWOK_DUAL_ESP32_TOUCH_V3) && \
     !defined(AWOK_DUAL_ESP32_MINI_V1) && !defined(AWOK_DUAL_ESP32_MINI_V2) && \
-    !defined(AWOK_DUAL_ESP32_MINI_V3)
+    !defined(AWOK_DUAL_ESP32_MINI_V3) && \
+    !defined(AWOK_DUAL_ESP32_TOUCH_BRIDGE_V1) && \
+    !defined(AWOK_DUAL_ESP32_TOUCH_BRIDGE_V2) && \
+    !defined(AWOK_DUAL_ESP32_TOUCH_BRIDGE_V3) && \
+    !defined(AWOK_DUAL_ESP32_MINI_BRIDGE_V1) && \
+    !defined(AWOK_DUAL_ESP32_MINI_BRIDGE_V2) && \
+    !defined(AWOK_DUAL_ESP32_MINI_BRIDGE_V3)
 //#define AWOK_DUAL_C5_TOUCH
 #define AWOK_DUAL_C5_MINI
 //#define AWOK_DUAL_ESP32_TOUCH_V1
@@ -726,8 +732,8 @@ void drawHeader(const String& title, const String& detail) {
 void drawFooter(const char* leftLabel, const char* rightLabel) {
   display.fillRect(0, kFooterTop, kScreenWidth, kScreenHeight - kFooterTop,
                    kBackground);
-  drawButton(6, 284, 106, 30, leftLabel, kMuted);
-  drawButton(128, 284, 106, 30, rightLabel, kAccent);
+  drawButton(4, 284, 112, 30, leftLabel, kMuted);
+  drawButton(124, 284, 112, 30, rightLabel, kAccent);
 }
 
 void drawSmallButton(int x, int y, int w, int h, const String& label,
@@ -835,11 +841,11 @@ void drawHome() {
   display.fillScreen(kBackground);
   drawHeader("AxD", sdReady ? "SD ready | pentest toolkit"
                             : "SD missing | pentest toolkit");
-  drawButton(20, 44, 200, 40, "Recon");
-  drawButton(20, 88, 200, 40, "Attacks", kBad);
-  drawButton(20, 132, 200, 40, "Monitor");
-  drawButton(20, 176, 200, 40, "GPS");
-  drawButton(20, 220, 200, 40, "Status");
+  drawButton(12, 44, 216, 40, "Recon");
+  drawButton(12, 88, 216, 40, "Attacks", kBad);
+  drawButton(12, 132, 216, 40, "Monitor");
+  drawButton(12, 176, 216, 40, "GPS");
+  drawButton(12, 220, 216, 40, "Status");
 #ifdef AWOK_MINI_DISPLAY
   display.button(128, 284, 106, 30, "About", kAccent);
 #else
@@ -1633,7 +1639,7 @@ void drawReconMenu() {
   for (int row = 0; row < kMenuPerPage; ++row) {
     const int index = start + row;
     if (index >= kReconItemCount) break;
-    drawButton(20, kMenuFirstY + row * kMenuRowPitch, 200, kMenuRowHeight,
+    drawButton(12, kMenuFirstY + row * kMenuRowPitch, 216, kMenuRowHeight,
                reconItemLabel(index));
   }
   if (pages > 1) {
@@ -1687,7 +1693,7 @@ void drawMonitorMenu() {
   for (int row = 0; row < kMenuPerPage; ++row) {
     const int index = start + row;
     if (index >= kMonitorItemCount) break;
-    drawButton(20, kMenuFirstY + row * kMenuRowPitch, 200, kMenuRowHeight,
+    drawButton(12, kMenuFirstY + row * kMenuRowPitch, 216, kMenuRowHeight,
                kMonitorItems[index]);
   }
   if (pages > 1) {
@@ -1701,10 +1707,10 @@ void drawAttacksMenu() {
   currentView = View::kAttacks;
   display.fillScreen(kBackground);
   drawHeader("ATTACK TOOLS", "active RF | authorized use only");
-  drawButton(20, 44, 200, 38, "Beacon Flood");
-  drawButton(20, 86, 200, 38, "Evil Portal");
-  drawButton(20, 128, 200, 38, "Evil Twin");
-  drawButton(20, 170, 200, 38, "Probe Lure");
+  drawButton(12, 44, 216, 38, "Beacon Flood");
+  drawButton(12, 86, 216, 38, "Evil Portal");
+  drawButton(12, 128, 216, 38, "Evil Twin");
+  drawButton(12, 170, 216, 38, "Probe Lure");
   display.setTextSize(1);
   display.setTextColor(kMuted, kBackground);
   display.setCursor(18, 216);
@@ -2177,7 +2183,10 @@ void openBleDetail(const BleEntry& entry) {
 }
 
 void initializeDisplayAndTouch() {
-#ifdef AWOK_MINI_DISPLAY
+#ifdef AWOK_HEADLESS
+  display.begin();
+  display.setTextWrap(false);
+#elif defined(AWOK_MINI_DISPLAY)
   for (int pin : {AwokPins::kButtonLeft, AwokPins::kButtonCenter,
                   AwokPins::kButtonUp, AwokPins::kButtonRight,
                   AwokPins::kButtonDown}) {

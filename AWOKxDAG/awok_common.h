@@ -110,7 +110,7 @@ constexpr uint8_t kDeauthHopChannels[] = {
 constexpr int kDeauthHopChannelCount =
     static_cast<int>(sizeof(kDeauthHopChannels) / sizeof(kDeauthHopChannels[0]));
 constexpr int kMaxDeauthTargets = 8;
-constexpr char kVersion[] = "1.5.0-syz.3";
+constexpr char kVersion[] = "1.5.2-syz.1";
 constexpr char kAuthor[] = "dag nazty";
 constexpr uint32_t kHandshakeRedrawMs = 500;
 constexpr uint32_t kHandshakePulseMs = 2000;
@@ -130,7 +130,6 @@ constexpr int kBeaconChannelCount =
 constexpr char kPortalSsid[] = "Free_WiFi";
 constexpr char kPortalCredsPath[] = "/awokxdag/portal_creds.csv";
 constexpr uint32_t kPortalRedrawMs = 1000;
-constexpr char kWardriveCsvPath[] = "/awokxdag/wardrive.csv";
 constexpr int kMaxWardriveMacs = AwokPins::kDualBand ? 512 : 128;
 constexpr uint32_t kWardriveRedrawMs = 800;
 constexpr int kBleHitQueueSlots = 24;

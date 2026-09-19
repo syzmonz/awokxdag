@@ -70,10 +70,11 @@ void updateMiniJoystick() {
 // A held contact is one press, even if it spans multiple redraws. In
 // particular, Delete -> OK must require releasing and pressing again.
 bool consumeTouchPress(bool pressed, uint32_t now) {
+  constexpr uint32_t kTouchDebounceMs = 120;
   static bool wasPressed = false;
   const bool newPress = pressed && !wasPressed;
   wasPressed = pressed;
-  if (!newPress || now - lastTouchMs < 250) return false;
+  if (!newPress || now - lastTouchMs < kTouchDebounceMs) return false;
   lastTouchMs = now;
   return true;
 }

@@ -6,21 +6,46 @@
      defined(AWOK_DUAL_ESP32_TOUCH_V1) + defined(AWOK_DUAL_ESP32_TOUCH_V2) + \
      defined(AWOK_DUAL_ESP32_TOUCH_V3) + \
      defined(AWOK_DUAL_ESP32_MINI_V1) + defined(AWOK_DUAL_ESP32_MINI_V2) + \
-     defined(AWOK_DUAL_ESP32_MINI_V3)) != 1
+     defined(AWOK_DUAL_ESP32_MINI_V3) + \
+     defined(AWOK_DUAL_ESP32_TOUCH_BRIDGE_V1) + \
+     defined(AWOK_DUAL_ESP32_TOUCH_BRIDGE_V2) + \
+     defined(AWOK_DUAL_ESP32_TOUCH_BRIDGE_V3) + \
+     defined(AWOK_DUAL_ESP32_MINI_BRIDGE_V1) + \
+     defined(AWOK_DUAL_ESP32_MINI_BRIDGE_V2) + \
+     defined(AWOK_DUAL_ESP32_MINI_BRIDGE_V3)) != 1
 #error "Select exactly one AWOK board profile"
 #endif
 // The orange bridge chip runs the full firmware with no screen/touch/buttons;
 // it is driven entirely over BLE. AWOK_HEADLESS makes display/input/boot no-ops.
-#if defined(AWOK_DUAL_C5_BRIDGE)
+#if defined(AWOK_DUAL_C5_BRIDGE) || \
+    defined(AWOK_DUAL_ESP32_TOUCH_BRIDGE_V1) || \
+    defined(AWOK_DUAL_ESP32_TOUCH_BRIDGE_V2) || \
+    defined(AWOK_DUAL_ESP32_TOUCH_BRIDGE_V3) || \
+    defined(AWOK_DUAL_ESP32_MINI_BRIDGE_V1) || \
+    defined(AWOK_DUAL_ESP32_MINI_BRIDGE_V2) || \
+    defined(AWOK_DUAL_ESP32_MINI_BRIDGE_V3)
 #define AWOK_HEADLESS
 #endif
 #if defined(AWOK_DUAL_C5_MINI) || defined(AWOK_DUAL_ESP32_MINI_V1) || \
     defined(AWOK_DUAL_ESP32_MINI_V2) || defined(AWOK_DUAL_ESP32_MINI_V3)
 #define AWOK_MINI_DISPLAY
 #endif
+#if defined(AWOK_DUAL_ESP32_MINI_V1) || defined(AWOK_DUAL_ESP32_MINI_V2) || \
+    defined(AWOK_DUAL_ESP32_MINI_V3) || \
+    defined(AWOK_DUAL_ESP32_MINI_BRIDGE_V1) || \
+    defined(AWOK_DUAL_ESP32_MINI_BRIDGE_V2) || \
+    defined(AWOK_DUAL_ESP32_MINI_BRIDGE_V3)
+#define AWOK_CLASSIC_MINI_WIRING
+#endif
 #if defined(AWOK_DUAL_ESP32_TOUCH_V1) || defined(AWOK_DUAL_ESP32_TOUCH_V2) || \
     defined(AWOK_DUAL_ESP32_TOUCH_V3) || defined(AWOK_DUAL_ESP32_MINI_V1) || \
-    defined(AWOK_DUAL_ESP32_MINI_V2) || defined(AWOK_DUAL_ESP32_MINI_V3)
+    defined(AWOK_DUAL_ESP32_MINI_V2) || defined(AWOK_DUAL_ESP32_MINI_V3) || \
+    defined(AWOK_DUAL_ESP32_TOUCH_BRIDGE_V1) || \
+    defined(AWOK_DUAL_ESP32_TOUCH_BRIDGE_V2) || \
+    defined(AWOK_DUAL_ESP32_TOUCH_BRIDGE_V3) || \
+    defined(AWOK_DUAL_ESP32_MINI_BRIDGE_V1) || \
+    defined(AWOK_DUAL_ESP32_MINI_BRIDGE_V2) || \
+    defined(AWOK_DUAL_ESP32_MINI_BRIDGE_V3)
 #define AWOK_CLASSIC_ESP32
 #if !defined(CONFIG_IDF_TARGET_ESP32)
 #error "Original AWOK Dual boards require ESP32 Dev Module (not C5/S2/S3)"
@@ -42,7 +67,7 @@ constexpr int kDisplayCs = 17;
 constexpr int kDisplayDc = 16;
 constexpr int kDisplayReset = 5;
 constexpr int kBacklight = 32;
-#ifdef AWOK_MINI_DISPLAY
+#ifdef AWOK_CLASSIC_MINI_WIRING
 constexpr bool kBacklightOn = false;
 constexpr int kTouchCs = -1;
 constexpr int kButtonLeft = 13;
@@ -50,7 +75,13 @@ constexpr int kButtonCenter = 34;
 constexpr int kButtonUp = 36;
 constexpr int kButtonRight = 39;
 constexpr int kButtonDown = 35;
-#if defined(AWOK_DUAL_ESP32_MINI_V1)
+#if defined(AWOK_DUAL_ESP32_MINI_BRIDGE_V1)
+constexpr char kBoardLabel[] = "Dual ESP32 Mini Bridge v1";
+#elif defined(AWOK_DUAL_ESP32_MINI_BRIDGE_V2)
+constexpr char kBoardLabel[] = "Dual ESP32 Mini Bridge v2";
+#elif defined(AWOK_DUAL_ESP32_MINI_BRIDGE_V3)
+constexpr char kBoardLabel[] = "Dual ESP32 Mini Bridge v3";
+#elif defined(AWOK_DUAL_ESP32_MINI_V1)
 constexpr char kBoardLabel[] = "Dual ESP32 Mini v1";
 #elif defined(AWOK_DUAL_ESP32_MINI_V2)
 constexpr char kBoardLabel[] = "Dual ESP32 Mini v2";
@@ -65,7 +96,16 @@ constexpr unsigned long kGpsBaud = 9600;  // verified on original Mini v3
 #else
 constexpr bool kBacklightOn = true;
 constexpr int kTouchCs = 21;
-#ifdef AWOK_DUAL_ESP32_TOUCH_V1
+#if defined(AWOK_DUAL_ESP32_TOUCH_BRIDGE_V1)
+constexpr char kBoardLabel[] = "Dual ESP32 Touch Bridge v1";
+constexpr int kSdCs = 12;
+#elif defined(AWOK_DUAL_ESP32_TOUCH_BRIDGE_V2)
+constexpr char kBoardLabel[] = "Dual ESP32 Touch Bridge v2";
+constexpr int kSdCs = 14;
+#elif defined(AWOK_DUAL_ESP32_TOUCH_BRIDGE_V3)
+constexpr char kBoardLabel[] = "Dual ESP32 Touch Bridge v3";
+constexpr int kSdCs = 14;
+#elif defined(AWOK_DUAL_ESP32_TOUCH_V1)
 constexpr char kBoardLabel[] = "Dual ESP32 Touch v1";
 constexpr int kSdCs = 12;
 #elif defined(AWOK_DUAL_ESP32_TOUCH_V3)
@@ -149,5 +189,6 @@ constexpr int kXMax = 3495;
 constexpr int kYMin = 437;
 constexpr int kYMax = 3449;
 #endif
-constexpr int kPressureMin = 400;
+// Accept lighter taps while staying above the XPT2046's idle/noise floor.
+constexpr int kPressureMin = 250;
 }  // namespace AwokTouchCalibration
