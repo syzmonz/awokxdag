@@ -76,14 +76,6 @@ constexpr uint8_t kLinkTelemGpsFix = 0x10;
 // a list and pick a target. Shares the magic/version/type prefix with LinkPacket
 // so the bridge can tell frames apart by type; it is a different size (~50 B),
 // which is fine over ESP-NOW (250 B max). The phone selects by `index`.
-struct AxdWifiResult {
-  uint32_t magic = kLinkMagic;
-  uint8_t version = kLinkProtoVersion;
-  uint8_t type = kLinkMsgWifiResult;
-  uint8_t index = 0;    // position in the screen chip's wifiEntries[]
-  uint8_t count = 0;    // total APs in the list
-  uint8_t bssid[6] = {0};
-
 struct AxdBleResult {
   uint32_t magic = kLinkMagic;
   uint8_t version = kLinkProtoVersion;
@@ -95,6 +87,13 @@ struct AxdBleResult {
   char name[24] = {0};
 };
 
+struct AxdWifiResult {
+  uint32_t magic = kLinkMagic;
+  uint8_t version = kLinkProtoVersion;
+  uint8_t type = kLinkMsgWifiResult;
+  uint8_t index = 0;    // position in the screen chip's wifiEntries[]
+  uint8_t count = 0;    // total APs in the list
+  uint8_t bssid[6] = {0};
   int8_t rssi = -127;
   uint8_t channel = 0;
   uint8_t auth = 0;     // wifi_auth_mode_t
