@@ -28,6 +28,7 @@ enum LinkMsgType : uint8_t {
   kLinkMsgTelem = 3,       // running counts + channel + session id (status back)
   kLinkMsgCommand = 4,     // bridge -> screen: run a tool (opcode in `reserved`)
   kLinkMsgWifiResult = 5,  // screen -> bridge: one scanned AP (AxdWifiResult)
+  kLinkMsgBleResult = 9,
   // Fleet Wardrive (N linked nodes splitting the channel plan into one CSV):
   kLinkMsgFleetInvite = 6,    // coordinator -> all: join my session (LinkPacket)
   kLinkMsgFleetJoin = 7,      // member -> coordinator: joining (caps in flags)
@@ -82,6 +83,18 @@ struct AxdWifiResult {
   uint8_t index = 0;    // position in the screen chip's wifiEntries[]
   uint8_t count = 0;    // total APs in the list
   uint8_t bssid[6] = {0};
+
+struct AxdBleResult {
+  uint32_t magic = kLinkMagic;
+  uint8_t version = kLinkProtoVersion;
+  uint8_t type = kLinkMsgBleResult;
+  uint8_t index = 0;
+  uint8_t count = 0;
+  int8_t rssi = -127;
+  char addr[18] = {0};
+  char name[24] = {0};
+};
+
   int8_t rssi = -127;
   uint8_t channel = 0;
   uint8_t auth = 0;     // wifi_auth_mode_t

@@ -325,6 +325,16 @@ function touchConnRow(c){  // in-place refresh (no full re-render, avoids flicke
 // ---- per-bridge Wi-Fi list ----------------------------------------------
 const AUTH = ["open","WEP","WPA","WPA2","WPA2E","WPA3","WPA2/3","WAPI","OWE"];
 function parseResult(dv, c){
+  if (dv.byteLength >= 4 && dv.getUint8(0) === 3) {  // BLE scan result
+    const i = dv.getUint8(1), count = dv.getUint8(2), rssi = dv.getInt8(3);
+    let t=""; for (let k=4;k<dv.byteLength;k++) t += String.fromCharCode(dv.getUint8(k));
+    const parts = t.split("\t"); const name = parts[0]||"", addr = parts[1]||"";
+    if (!c.bleNets) c.bleNets = new Map();
+    c.bleNets.set(i, {i, count, rssi, name, addr});
+    for (const k of [...c.bleNets.keys()]) if (k >= count) c.bleNets.delete(k);
+    if (c.id === activeId) renderBle();
+    return;
+  }
   if (dv.byteLength >= 1 && dv.getUint8(0) === 2) {  // wardrive WiGLE CSV row (text)
     let row = "";
     for (let k = 1; k < dv.byteLength; k++) row += String.fromCharCode(dv.getUint8(k));
@@ -342,6 +352,14 @@ function parseResult(dv, c){
   if (c.id === activeId) renderNets();
 }
 
+function renderBle(){
+  const box = $("netlist"); const c = activeConn();
+  const list = c && c.bleNets ? [...c.bleNets.values()].sort((a,b)=>b.rssi-a.rssi) : [];
+  if (!list.length){ box.innerHTML = '<div class="k">No BLE devices yet.</div>'; return; }
+  box.innerHTML = list.map(n =>
+    '<div class="net"><div><b>'+(n.name||"<unnamed>")+'</b><div class="k">'+n.addr+'</div></div>'+
+    '<div class="k">'+n.rssi+' dBm</div></div>').join("");
+}
 function renderNets(){
   const box = $("netlist");
   const c = activeConn();
@@ -532,7 +550,7 @@ document.querySelectorAll('#target-seg button').forEach(b =>
     document.querySelectorAll('#target-seg button').forEach(x =>
       x.classList.toggle("on", x === b));
     const c = activeConn();
-    if (c){ c.nets.clear(); c.selIndex = null; }  // lists are per-chip
+    if (c){ c.nets.clear(); if (c.bleNets) c.bleNets.clear(); c.selIndex = null; }  // lists are per-chip
     renderNets();
     applyTargetGating();
     log("target = " + (target===TGT_BRIDGE ? "this bridge" : "screen chip"));
@@ -576,8 +594,8 @@ const CLEAR_ON_OP = new Set([1,2,3,4,5,6,10,11,12,13,14,15,16,17,30,31,32,33,34,
 document.querySelectorAll("button[data-op]").forEach(b =>
   b.addEventListener("click", () => {
     const op = Number(b.dataset.op);
-    if (op === 50){ const c = activeConn(); if (c){ c.nets.clear(); c.selIndex = null; } renderNets(); log("list cleared"); return; }
-    if (CLEAR_ON_OP.has(op)){ const c = activeConn(); if (c){ c.nets.clear(); c.selIndex = null; } renderNets(); }
+    if (op === 50){ const c = activeConn(); if (c){ c.nets.clear(); if (c.bleNets) c.bleNets.clear(); c.selIndex = null; } renderNets(); log("list cleared"); return; }
+    if (CLEAR_ON_OP.has(op)){ const c = activeConn(); if (c){ c.nets.clear(); if (c.bleNets) c.bleNets.clear(); c.selIndex = null; } renderNets(); }
     const label = (b.textContent || ("op " + op)).trim();
     log("\u2192 " + label);
     setBusy(label);

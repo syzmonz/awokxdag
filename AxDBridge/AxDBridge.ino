@@ -115,6 +115,21 @@ static void onEspNowRecv(const esp_now_recv_info_t*, const uint8_t* data, int le
     memcpy(&p, data, sizeof(p));
     g_lastScreenMs = millis();
     bridgeForwardScreenStatus(p);
+  } else if (type == kLinkMsgBleResult && len == static_cast<int>(sizeof(AxdBleResult))) {
+    AxdBleResult r;
+    memcpy(&r, data, sizeof(r));
+    uint8_t blob[4 + 44];
+    blob[0] = 3;
+    blob[1] = r.index;
+    blob[2] = r.count;
+    blob[3] = static_cast<uint8_t>(r.rssi);
+    size_t nl = strnlen(r.name, sizeof(r.name));
+    size_t al = strnlen(r.addr, sizeof(r.addr));
+    size_t o = 4;
+    memcpy(blob + o, r.name, nl); o += nl;
+    blob[o++] = '\t';
+    memcpy(blob + o, r.addr, al); o += al;
+    bridgeNotify(g_results, blob, o);
   } else if (type == kLinkMsgWifiResult && len == static_cast<int>(sizeof(AxdWifiResult))) {
     AxdWifiResult r;
     memcpy(&r, data, sizeof(r));

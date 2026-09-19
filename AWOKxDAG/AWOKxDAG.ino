@@ -2153,6 +2153,11 @@ void scanBle() {
   releaseBleMemory();
   scanInProgress = false;
   drawBleResults();
+#ifdef AWOK_HEADLESS
+  if (g_bridgePhoneConnected) linkStreamBleResults();
+#else
+  if (remoteActive) linkStreamBleResults();
+#endif
 }
 
 void openWifiAudit(const WifiEntry& entry, View returnView) {

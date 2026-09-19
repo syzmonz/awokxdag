@@ -814,6 +814,37 @@ void linkDrainPackets() {
 // Stream the current Wi-Fi scan list to the phone (screen -> bridge -> BLE), one
 // AxdWifiResult per AP. Sent while homed on the rendezvous channel, where the
 // bridge listens.
+void linkStreamBleResults() {
+  const int n = bleCount;
+#ifdef AWOK_HEADLESS
+  for (int i = 0; i < n; ++i) {
+    uint8_t body[3 + 46];
+    body[0] = static_cast<uint8_t>(i);
+    body[1] = static_cast<uint8_t>(n);
+    body[2] = static_cast<uint8_t>(static_cast<int8_t>(bleEntries[i].rssi));
+    String t = bleEntries[i].name + "\t" + bleEntries[i].address;
+    size_t tl = t.length(); if (tl > 46) tl = 46;
+    memcpy(body + 3, t.c_str(), tl);
+    bridgeNotifyResult(3, body, 3 + tl);
+    delay(30);
+  }
+  return;
+#else
+  if (!linkEspNowReady) return;
+  esp_wifi_set_channel(kLinkChannel, WIFI_SECOND_CHAN_NONE);
+  for (int i = 0; i < n; ++i) {
+    AxdBleResult r;
+    r.index = static_cast<uint8_t>(i);
+    r.count = static_cast<uint8_t>(n);
+    r.rssi = static_cast<int8_t>(bleEntries[i].rssi);
+    strncpy(r.addr, bleEntries[i].address.c_str(), sizeof(r.addr) - 1);
+    strncpy(r.name, bleEntries[i].name.c_str(), sizeof(r.name) - 1);
+    esp_now_send(kLinkBroadcastAddr, reinterpret_cast<uint8_t*>(&r), sizeof(r));
+    delay(30);
+  }
+#endif
+}
+
 void linkStreamWifiResults() {
   const int n = wifiCount;
 #ifdef AWOK_HEADLESS
