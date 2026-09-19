@@ -957,6 +957,11 @@ void linkDispatchCommand(uint8_t op, uint8_t arg) {
   }
 }
 
+extern volatile uint32_t lureProbes;
+extern int auditCount;
+extern int trackerCount;
+extern int probeSsidCount;
+extern int wpsCount;
 static void linkToolCounters(uint32_t& a, uint32_t& b) {
   switch (currentView) {
     case View::kDeauthAttack: a = deauthFramesSent; b = (uint32_t)deauthTargetCount; break;
