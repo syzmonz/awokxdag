@@ -100,8 +100,8 @@
 
   <div class="card">
     <div class="stats">
-      <div><div class="k">Wi-Fi</div><div id="wifi" class="v">–</div></div>
-      <div><div class="k">BLE</div><div id="ble" class="v">–</div></div>
+      <div><div class="k" id="wifiLbl">Wi-Fi</div><div id="wifi" class="v">–</div></div>
+      <div><div class="k" id="bleLbl">BLE</div><div id="ble" class="v">–</div></div>
       <div><div class="k">Tool</div><div id="tool" class="v" style="font-size:15px">–</div></div>
     </div>
     <div id="gps" class="k" style="margin-top:10px">GPS: –</div>
@@ -228,6 +228,8 @@ const TARGET_OPS = [52,53,54,22,23];  // need a selected network
 const TGT_BRIDGE = 0, TGT_SCREEN = 1;
 const VIEW_NAMES = ["Home","Wi-Fi","Channels","BLE","BLE Detail","Saved","Wi-Fi Audit","Signal","Deauth Watch","Deauth Select","Deauth Attack","Handshake","Clients","Recon","Monitor","Attacks","Beacon Flood","Evil Portal","GPS","Wardrive","Packet Mon","Locator","WPS","Status","Settings","Screen Test","Files","BLE Spam Watch","Probe Lure","Rogue Watch","Hidden SSID","Cameras","Security Audit","Trackers","Harvester","Probe Intel","Karma Watch","Beacon Watch","Auth Flood","Advanced Watch","Link Wardrive","Network","Network Setup","Network Edit","Network APs","Network Results","Network Host","Network Detail"];
 function viewName(id){ return (id!=null && id<VIEW_NAMES.length) ? VIEW_NAMES[id] : (id!=null?("#"+id):"–"); }
+const TOOL_COUNTERS = {8:["Deauth","Disassoc"],10:["Frames","Targets"],11:["EAPOL","PMKID"],12:["Clients",null],16:["Beacons",null],17:["Creds",null],19:["Nets","BLE"],22:["WPS",null],27:["Spam","Total"],28:["Probes",null],30:["Hidden",null],31:["Cameras",null],32:["Findings",null],33:["Trackers",null],34:["Seen","PMKID"],35:["SSIDs",null],36:["KarmaAP",null],37:["Beacons",null],38:["AuthFr",null],39:["Anom",null],40:["Nets","BLE"]};
+function toolLabels(t){ return TOOL_COUNTERS[t] || ["Wi-Fi","BLE"]; }
 let busyPending=false, busyToolAtTap=null, busySince=0;
 function setBusy(label){ const c=activeConn(); const s=c?c.statuses[target]:null; busyToolAtTap = s?s.tool:null; busyPending=true; busySince=Date.now(); const el=document.getElementById("busy"); if(el) el.textContent="Working… "+label; const card=document.getElementById("busy-card"); if(card) card.hidden=false; }
 function clearBusy(){ busyPending=false; const card=document.getElementById("busy-card"); if(card) card.hidden=true; }
@@ -263,7 +265,7 @@ function renderStatusPanel(){
   box.innerHTML =
     '<div class="net"><div><b>'+viewName(s.tool)+'</b><div class="k">'+state+'</div></div>'+
     '<div class="k" style="color:'+(stale?"var(--bad)":"inherit")+'">'+(age!=null?age+"s ago":"\u2013")+'</div></div>'+
-    '<div class="k" style="margin-top:8px">Wi-Fi: '+(s.wifi!=null?s.wifi:"\u2013")+'   \u00b7   BLE: '+(s.ble!=null?s.ble:"\u2013")+(s.battery!=null?"   \u00b7   Batt: "+s.battery+"%":"")+'</div>'+
+    (function(){ const L=toolLabels(s.tool); let r='<div class="k" style="margin-top:8px">'+L[0]+': '+(s.wifi!=null?s.wifi:"\u2013"); if(L[1]!=null) r+='   \u00b7   '+L[1]+': '+(s.ble!=null?s.ble:"\u2013"); if(s.battery!=null) r+='   \u00b7   Batt: '+s.battery+'%'; return r+'</div>'; })()+
     '<div class="k">'+(s.gpsFix?"GPS: FIX \u00b7 "+s.sats+" sats":(s.sats!=null?"GPS: no fix \u00b7 "+s.sats+" sats":"GPS: \u2013"))+'</div>'+
     (s.fleetShort?'<div class="k">Fleet: '+s.fleetShort+'</div>':"")+
     (stale?'<div class="k" style="color:var(--bad);margin-top:6px">No update in '+age+'s \u2014 link may have dropped</div>':"");
@@ -472,8 +474,11 @@ function renderStats(){
     $("fleet-bridge-info").textContent = "This bridge: waiting for status";
     return; }
   const s = c.statuses[target] || {};
-  $("wifi").textContent = s.wifi ?? "–";
-  $("ble").textContent  = s.ble ?? "–";
+  { const L=toolLabels(s.tool);
+    const wl=document.getElementById("wifiLbl"), bl=document.getElementById("bleLbl");
+    if(wl) wl.textContent=L[0]; if(bl) bl.textContent=L[1]||"–";
+    $("wifi").textContent = s.wifi ?? "–";
+    $("ble").textContent  = (L[1]==null) ? "–" : (s.ble ?? "–"); }
   $("tool").textContent = s.tool!=null ? viewName(s.tool) : "–";
   $("gps").textContent = s.gpsFix
     ? "GPS: FIX · " + s.sats + " sats · " + s.lat.toFixed(5) + ", " + s.lon.toFixed(5)

@@ -957,9 +957,35 @@ void linkDispatchCommand(uint8_t op, uint8_t arg) {
   }
 }
 
+static void linkToolCounters(uint32_t& a, uint32_t& b) {
+  switch (currentView) {
+    case View::kDeauthAttack: a = deauthFramesSent; b = (uint32_t)deauthTargetCount; break;
+    case View::kHandshake: a = handshakeEapolCount; b = handshakePmkidSeen ? 1u : 0u; break;
+    case View::kBeaconFlood: a = beaconFramesSent; b = 0; break;
+    case View::kEvilPortal: a = portalCredsCount; b = 0; break;
+    case View::kProbeLure: a = lureProbes; b = 0; break;
+    case View::kAuthFlood: a = authFloodTotal; b = 0; break;
+    case View::kClientSniffer: a = (uint32_t)clientCount; b = 0; break;
+    case View::kDeauthMonitor: a = deauthFrameCount; b = disassocFrameCount; break;
+    case View::kBeaconWatch: a = beaconWatchTotal; b = 0; break;
+    case View::kBleSpamWatch: a = bleDetectSpam; b = bleDetectTotal; break;
+    case View::kHarvester: a = harvestSeenCount; b = harvestPmkidCount; break;
+    case View::kSecurityAudit: a = (uint32_t)auditCount; b = 0; break;
+    case View::kTrackerScan: a = (uint32_t)trackerCount; b = 0; break;
+    case View::kProbeIntel: a = (uint32_t)probeSsidCount; b = 0; break;
+    case View::kKarmaWatch: a = (uint32_t)karmaApCount; b = 0; break;
+    case View::kAdvancedWatch: a = (uint32_t)advancedApCount; b = 0; break;
+    case View::kHiddenReveal: a = (uint32_t)hiddenCount; b = 0; break;
+    case View::kCameraScan: a = (uint32_t)cameraCount; b = 0; break;
+    case View::kWpsScan: a = (uint32_t)wpsCount; b = 0; break;
+    default: break;
+  }
+}
+
 void linkBroadcastStatus() {
-  const uint32_t nets = wardriveActive ? wardriveNetworks : (uint32_t)wifiCount;
-  const uint32_t ble = wardriveActive ? wardriveBleCount : (uint32_t)bleCount;
+  uint32_t nets = wardriveActive ? wardriveNetworks : (uint32_t)wifiCount;
+  uint32_t ble = wardriveActive ? wardriveBleCount : (uint32_t)bleCount;
+  linkToolCounters(nets, ble);
   const uint8_t view = static_cast<uint8_t>(currentView);
 #ifdef AWOK_HEADLESS
   // Bridge -> phone directly: [wifi u32][ble u32][tool u8][gpsFix u8][sats u8]
