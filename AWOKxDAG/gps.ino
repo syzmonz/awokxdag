@@ -568,6 +568,8 @@ void drawWardrive() {
 // scan, and tear the scan down before Wi-Fi is released for the BLE window.
 static void wardriveEnterWifi() {
   WiFi.disconnect(false, false);
+  esp_wifi_set_channel(kLinkChannel, WIFI_SECOND_CHAN_NONE);
+  linkBroadcastStatus();
   WiFi.scanNetworks(true, true, false, 120);
 }
 static void wardriveExitWifi() { WiFi.scanDelete(); }
@@ -604,12 +606,16 @@ void startWardrive() {
                      : "[wardrive] started (Wi-Fi only)");
   wardriveActive = true;
   drawWardrive();
+  esp_wifi_set_channel(kLinkChannel, WIFI_SECOND_CHAN_NONE);
+  linkBroadcastStatus();
 }
 
 void stopWardrive() {
   wardriveActive = false;
   radioSchedulerEnd(wardriveSched);
   closeWardriveCsv();
+  esp_wifi_set_channel(kLinkChannel, WIFI_SECOND_CHAN_NONE);
+  linkBroadcastStatus();
   Serial.printf("[wardrive] stopped; %lu Wi-Fi, %lu BLE\n",
                 static_cast<unsigned long>(wardriveNetworks),
                 static_cast<unsigned long>(wardriveBleCount));
@@ -656,12 +662,10 @@ void updateWardrive() {
       }
       WiFi.scanDelete();
       ++wardriveScans;
-      // Keep scanning for the whole Wi-Fi window (multiple passes) instead of
-      // ending after one scan. Every Wi-Fi<->BLE switch triggers a BLE
-      // controller init/deinit, and the closed C5 controller leaks ~0.4 KB DMA
-      // per such cycle -- so switching less often is what keeps BLE alive across
-      // a long wardrive (and a longer dwell captures more APs while driving).
-      // The scheduler ends this window at wifiWindowMs.
+      // Between scan passes, briefly home to the rendezvous channel so the
+      // screen chip delivers live AP & BLE counts to the bridge/phone.
+      esp_wifi_set_channel(kLinkChannel, WIFI_SECOND_CHAN_NONE);
+      linkBroadcastStatus();
       WiFi.scanNetworks(true, true, false, 120);
     } else {
       // not started / failed: kick off a scan

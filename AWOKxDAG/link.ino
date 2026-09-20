@@ -605,6 +605,8 @@ void fleetStopLocal() {
   linkWardriveActive = false;
   fleetStopBleScanOnly();
   closeWardriveCsv();
+  esp_wifi_set_channel(kLinkChannel, WIFI_SECOND_CHAN_NONE);
+  linkBroadcastStatus();
 }
 
 // Coordinator: stop the fleet wardrive but keep the session up (members stop via
@@ -1088,8 +1090,14 @@ static void linkToolCounters(uint32_t& a, uint32_t& b) {
 }
 
 void linkBroadcastStatus() {
-  uint32_t nets = wardriveActive ? wardriveNetworks : (uint32_t)wifiCount;
-  uint32_t ble = wardriveActive ? wardriveBleCount : (uint32_t)bleCount;
+  const bool wardriving = wardriveActive || linkWardriveActive || fleetWardriveOn ||
+                          (currentView == View::kWardrive) || (currentView == View::kLinkWardrive);
+  uint32_t nets = wardriving
+                            ? wardriveNetworks
+                            : (wifiCount > 0 ? (uint32_t)wifiCount : wardriveNetworks);
+  uint32_t ble = wardriving
+                           ? wardriveBleCount
+                           : (bleCount > 0 ? (uint32_t)bleCount : wardriveBleCount);
   linkToolCounters(nets, ble);
   const uint8_t view = static_cast<uint8_t>(currentView);
 #ifdef AWOK_HEADLESS
@@ -1369,6 +1377,8 @@ void startLinkWardrive() {
                 linkState == kLinkReady ? "paired" : "solo",
                 linkAssignedChannelCount());
   drawLinkWardrive();
+  esp_wifi_set_channel(kLinkChannel, WIFI_SECOND_CHAN_NONE);
+  linkBroadcastStatus();
 }
 
 void stopLinkWardrive() {
@@ -1376,6 +1386,8 @@ void stopLinkWardrive() {
   linkInWindow = false;
   WiFi.scanDelete();
   closeWardriveCsv();
+  esp_wifi_set_channel(kLinkChannel, WIFI_SECOND_CHAN_NONE);
+  linkBroadcastStatus();
   // Keep Wi-Fi STA resident; powering it down breaks the next radio bring-up.
   Serial.printf("[link] split wardrive stopped; %lu Wi-Fi networks\n",
                 static_cast<unsigned long>(wardriveNetworks));

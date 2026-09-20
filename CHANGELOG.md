@@ -5,6 +5,210 @@ All notable changes to AxD are documented here. This project follows
 
 ## [Unreleased]
 
+## Please read this repo's documentation at [BattInfo.MD](BattInfo.md)
+
+## [1.5.5] - 2026-09-20
+
+### Fixed
+
+- **Live Wi-Fi AP and BLE discovery counters in Web Bluetooth control.** Resolved an
+  issue where scanned Wi-Fi APs and BLE devices were not displayed (showing `0` or
+  `–`) in the control interface during wardriving and fleet multi-node wardriving
+  for both the bridge chip and the screen chip.
+  - **Fleet status telemetry (`AWOKxDAG/link.ino`):** Fixed `linkBroadcastStatus()`
+    which previously only checked `wardriveActive`. During fleet wardriving,
+    `linkWardriveActive` and `fleetWardriveOn` were active instead, causing discovery
+    counts to fall back to unpopulated manual scan counters (`0`). It now checks all
+    wardriving and fleet states and retains session totals upon stopping.
+  - **Screen-to-bridge inter-pass channel rendezvous (`AWOKxDAG/gps.ino`):** While
+    actively wardriving on the screen chip, the Wi-Fi radio continuously sweeps
+    channels 1–14 (and 5 GHz). Between scan passes (right after `WiFi.scanDelete()`)
+    and on BLE-to-Wi-Fi phase transitions, the screen chip now temporarily homes to
+    `kLinkChannel` (channel 1) and calls `linkBroadcastStatus()`. This ensures the
+    bridge chip reliably receives live updates every 1–2 seconds.
+  - **Bridge protocol & self-status alignment (`AxDBridge/AxDBridge.ino`):** Added the
+    missing source prefix byte (`blob[0] = 1`), populated the complete 25-byte status
+    payload with GPS and fleet tails, prefixed Wi-Fi result frames, and added a 1 Hz
+    self-status heartbeat for `kSourceBridge` (`0`).
+
+### Added
+
+- **Dual-target telemetry breakdown in web control app.**
+  - **Telemetry tab:** Added target indicator badge (`Screen Chip` vs `Bridge Chip`)
+    and live dual-target quick breakdown (`Screen: X APs · Y BLE | Bridge: A APs · B BLE`).
+  - **Fleet tab:** Added dedicated breakdown stat cards for Screen Chip Scanned,
+    Bridge Chip Scanned, and Fleet Total Sighted.
+  - **Live node descriptions:** Enhanced `fleetDescription()` to dynamically append
+    live AP and BLE counts per node (e.g. `coordinator · code 1234 · 3 nodes · logging · 142 APs · 38 BLE`).
+  - **Connection list summary:** Updated `connSummary()` to report AP and BLE
+    counts across both target chips.
+  - **Tool opcode decoder:** Added friendly mapping for `View::kWardrive` (19) and
+    active `Fleet Wardrive` state.
+
+## [1.5.4] - 2026-09-20
+
+### Added
+
+- **Modernized Web Bluetooth remote control interface.** The web control app
+  (`website/public/control.html` and `website/dist/control.html`) now features a
+  streamlined tactical dark theme, tabbed navigation (Telemetry, Wi-Fi Scan,
+  Wardrive, Tools & Ops, Fleet, and Terminal Log), real-time Wi-Fi network search
+  and sorting (by signal strength or channel), dynamic 4-bar RSSI signal meters,
+  and direct Google Maps link from live GPS coordinates.
+- **Real-time WiGLE wardrive stream parsing.** Incoming WiGLE 1.6 CSV rows
+  streamed from the ESP32 bridge over BLE are parsed live into a structured
+  sightings table displaying Type (Wi-Fi/BLE), SSID, BSSID, RSSI, Channel, Auth,
+  and GPS coordinates, alongside live counters for total sightings, Wi-Fi APs,
+  BLE devices, and open networks.
+- **Friendly tool opcode decoding.** Raw tool opcodes (`#1`, `#7`, `#50`, `#52`,
+  etc.) displayed on the phone are automatically mapped to readable names and
+  status badges (e.g. `#7 Wardrive`, `#1 Wi-Fi Scan`, `#52 Deauth`).
+
+### Fixed
+
+- **Fleet coordinator lockup under multi-node wardrive load.** Fixed an issue where
+  the fleet coordinator froze shortly after wardriving began with more than one
+  worker node connected.
+  - **Batched SD writes:** Coordinator now buffers WiGLE CSV writes and batches SD
+    card flushes (every 5 rows or 1000 ms) instead of executing a synchronous,
+    blocking `flush()` on every single incoming row from worker nodes.
+  - **Bounded ESP-NOW row queue processing:** Restricted ESP-NOW fleet row queue
+    ingestion to a maximum of 4 rows per frame, increased queue capacity from 16 to
+    32 entries, and added cooperative task yielding (`yield()` / `delay(1)`) every
+    3 dispatches to avoid starving the coordinator main loop and watchdog timer.
+  - **Non-blocking BLE relay buffer:** Replaced blocking GATT notification loops
+    with a non-blocking ring buffer on the bridge chip, preventing worker node
+    backpressure when streaming live rows to a connected phone.
+- **Classic ESP32 DRAM overflow during compilation.** Resolved `region 'dram0_0_seg' overflowed by 8336 bytes` during `arduino-cli compile` on classic single-band ESP32 Touch targets (`build-esp32-touch-v1`, `v2`, `v3`). Tuned static queues and deduplication tables (`kFleetRowRingSlots`, `kWardriveBloomFilterBytes`, `kCaptureQueueSlots`, `kAdvancedHitQueueSlots`, `kAdvancedMaxAps`, etc.) proportionally for single-band operation, reclaiming >25 KB of statically allocated `.dram0.bss` memory.
+
+## [1.5.3] - 2026-09-19
+
+### Changed
+
+- **Single wardrive credential file.** WiGLE and WDGWars credentials now share
+  one `wardrive_upload.txt` file on SD, with a safe checked-in example that can
+  be copied, completed, and renamed without committing live API credentials.
+- **GPS-backed system time.** Fresh GPS UTC now sets and periodically corrects
+  the ESP system clock used by TLS, logs, and SD/FAT timestamps. NTP remains an
+  upload fallback when GPS time is unavailable, and synchronized UTC survives
+  temporary GPS signal loss instead of reverting to an uptime-only timestamp.
+- **Wardrive upload reliability.** WiGLE and WDGWars TLS trust now includes
+  stable root certificates, connection and streaming timeouts are explicit,
+  and failures identify the TLS, header, SD-read, body, or response stage
+  instead of collapsing every problem into `connection/write failed`.
+  Network discovery buffers and the SD file handle are now released before the
+  TLS handshake, preventing mbedTLS `SSL_ALLOC_FAILED` (`-32512`) on RAM-tight
+  boards; LAN-tool workspace is recreated lazily when it is next needed.
+  On PSRAM-equipped C5 boards, large mbedTLS record allocations are routed to
+  PSRAM while AES/key state stays in internal RAM, preserving enough internal
+  heap for the ESP hardware AES backend to complete the handshake.
+
+## [1.5.2] - 2026-09-19
+
+### Added
+
+- **Direct wardrive upload page.** Under Network Tools, users can select and
+  join a Wi-Fi network, choose a `wardrive-*.csv` file from SD, select WiGLE or
+  WDGWars, and explicitly upload it. Credentials come from one SD config file,
+  `wardrive_upload.txt` (with a checked-in safe example), stay
+  out of logs, and are wiped from RAM after a bounded multipart upload over
+  certificate-verified HTTPS.
+- **WiGLE 1.6 export.** New on-device and phone-downloaded wardrive CSVs include
+  Frequency, RCOIs, and MfgrId columns for documented WDGWars compatibility.
+
+### Changed
+
+- **Touch controls improved.** Primary Touch buttons are wider, light taps are
+  accepted at a lower pressure threshold, and the press debounce was reduced
+  from 250 ms to 120 ms for faster navigation without repeat firing.
+
+## [1.5.1] - 2026-09-18
+
+### Added
+
+- **Credit:** Fleet Wardrive's explicit coordinator/node topology was informed
+  by **[Piglet](https://github.com/Hamspiced/piglet)** by **Hamspiced**. Piglet's
+  Core/Node ESP-NOW implementation was the reference for keeping one coordinator
+  authoritative while workers discover, join, heartbeat, and reconnect. AxD's
+  wire protocol, roster/channel assignment, aggregation, UI, and web integration
+  are implemented for this firmware.
+
+- **Phase 1 (done): fleet session + N-way channel split.** New ESP-NOW protocol
+  (`FleetInvite`/`FleetJoin`/`FleetRoster` in `link_protocol.h`) lets up to
+  `kFleetMaxNodes` C5 or classic ESP32 chips form one session: a coordinator broadcasts an invite
+  with a short code, other armed nodes **auto-join**, and the coordinator deals a
+  **roster** so every node learns its index and role. The old 2-way channel deal
+  (`linkNextAssignedChannel`) is generalized to **N-way** (`idx % M == mySlice`),
+  and one member can be designated the BLE node. Testable over serial: `F` starts
+  a fleet, `J` arms a node to auto-join; each prints its assignment.
+- **Phase 2 (done): row aggregation into one CSV.** Workers queue each new WiGLE
+  row and stream it to the coordinator in the rendezvous window (`FleetWardriveRow`
+  frames, per-member contiguous ACK + retransmit); the coordinator dedups and
+  writes it to SD and/or streams it to the phone via the existing
+  `kSourceWardrive` path -- one merged CSV. Fleet nodes share the rendezvous
+  window and sync their clocks to the coordinator (carried in the invite). `f`
+  starts a fleet wardrive; joiners start automatically via the roster's
+  `wardriveOn` flag. Coordinator prints a periodic aggregate/per-member status.
+  Validated on hardware: a 2-node fleet forms and the coordinator aggregates.
+- **Phase 3 (done): dedicated BLE node.** The roster designates one member as
+  the fleet's BLE scanner; it is excluded
+  from the N-way Wi-Fi split. Instead of hopping Wi-Fi channels it parks on the
+  link channel and runs a continuous BLE observer scan (co-resident with
+  Wi-Fi/ESP-NOW), reusing the wardrive BLE callbacks/queue. New devices are
+  deduped by address and either logged locally (if the BLE node is also the
+  coordinator) or streamed to the coordinator as `FleetWardriveRow` frames
+  (`isBle=1`) in the same rendezvous window as Wi-Fi rows, landing in the one
+  merged CSV. So a fleet covers Wi-Fi *and* BLE without cross-node duplicates.
+- **Capability-aware, collision-free channel assignment.** Exactly one fleet
+  member is BLE-only. Classic v1-v3 Touch/Mini WROOM workers take precedence on
+  2.4 GHz and evenly split those channels only; when classics are present, C5
+  workers stay on 5 GHz and evenly split that band only. With no classic Wi-Fi
+  worker, C5 workers evenly split the full dual-band plan. BLE-node selection
+  preserves the only C5 in a mixed fleet so 5 GHz coverage is not lost, and
+  role changes stop the previous BLE scan before the node returns to Wi-Fi.
+- **Phase 4 (done): fleet UI on-device and in the web app.** The Link screen's
+  idle footer is now **Back / Fleet / Solo**; Fleet opens a menu with **Start**
+  (become coordinator) and **Join** (arm to auto-join), replacing the serial
+  `f`/`j` triggers with buttons. A live fleet view shows the session code, each
+  member's role (coord / wifi / BLE) and row count, the aggregate Wi-Fi/BLE
+  totals, and LOGGING/READY state, with **Go/Stop** (coordinator) and **Leave**
+  controls. The web app (`control.html`) gains a **Fleet** card — Start/Join/Leave
+  buttons plus per-target status (coordinator/member, code, live node count and
+  logging state) parsed from the fleet tail on bridge and screen status blobs.
+  The coordinator display shows `Nodes: N`; worker heartbeats and a six-second
+  timeout keep that count current. New opcodes `kAxdCmdFleetStart/Join/
+  Stop` (60–62) let the phone drive the fleet on either chip. So the flow is:
+  Start Fleet on one chip, switch target and Join on the others, one merged CSV.
+- **Multi-bridge web app.** `control.html` now manages several bridge
+  connections at once: **Add ESP** connects each board's orange chip and they all
+  stay live, so you switch the **active** bridge with a tap instead of
+  disconnecting and reconnecting. Each bridge shows its own live Wi-Fi/BLE counts,
+  GPS, and fleet role in the connection list; commands and the Wi-Fi list follow
+  the active bridge, while **wardrive rows from every connected bridge merge into
+  the one CSV**. Handy for a multi-board fleet where each board's coordinator is a
+  separate BLE server.
+- **Fixed coordinators "fighting."** Fleet roles now follow an explicit
+  coordinator/worker model: the chip where **Start** was pressed remains the
+  coordinator, while **Join** pins a worker to that coordinator's MAC and
+  session until Leave. Coordinators ignore competing invites, joined workers
+  ignore foreign invites/rosters, and unsolicited rosters cannot auto-enroll a
+  chip. A malformed roster that omits the local worker is rejected instead of
+  defaulting it to coordinator slot zero. Powering up never auto-links or
+  promotes a chip into a fleet.
+- **A new CSV per wardrive run.** Solo, link, and fleet wardrive now open a fresh
+  `/awokxdag/wardrive-NNNN.csv` (first unused index) on every Start instead of
+  appending to one ever-growing `wardrive.csv`, so each session is its own file.
+  The wardrive/split screens show the current file name; a serial line reports it.
+- **Classic ESP32 builds fixed.** The fleet feature's two `FleetWardriveRow` row
+  rings (~76 B/slot × 96 × 2 ≈ 15 KB of static DRAM) overflowed the RAM-tight
+  single-band ESP32's `dram0_0_seg`. `kFleetRowRingSlots` is now 96 on the
+  dual-band C5 and 24 on the classic ESP32, so all nine board targets link again.
+- **Classic bridges added.** Original Dual ESP32 Touch and Mini v1/v2/v3 now
+  each have a matching headless BLE-to-ESP-NOW bridge profile and packaged
+  build/flash target. Classic bridges retain the revision-specific GPS/SD pin
+  map and restrict relay sweeps to supported 2.4 GHz channels.
+- 1.5.1 Fleet Wardrive is feature-complete (Phases 1–4).
+
 ## [1.4.4] - 2026-09-17
 
 ### Changed
@@ -53,7 +257,7 @@ All notable changes to AxD are documented here. This project follows
   so wardrive there streams each WiGLE row (BSSID/SSID/auth/time/chan/RSSI/lat/
   lon/alt/accuracy/type) to the phone over BLE as it's logged; the app collects
   them and a **Download CSV** button saves a `WigleWifi_1.4` file straight to the
-  phone. On the white chip wardrive still writes `wardrive.csv` to SD as before.
+  phone. On the white chip each Start writes a new `wardrive-NNNN.csv` to SD.
   Files/SD browsing stays screen-chip only on the bridge.
 - **Wi-Fi Scan is now continuous** on both chips. The tool async-rescans on a
   loop and **merges results by BSSID**, so the list accumulates every AP seen
@@ -603,7 +807,12 @@ All notable changes to AxD are documented here. This project follows
 - Touchscreen UI, SD capture manager, status screens, serial controls, build
   workflow, and recovery documentation.
 
-[Unreleased]: https://github.com/dagnazty/awokxdag/compare/v1.4.4...HEAD
+[Unreleased]: https://github.com/dagnazty/awokxdag/compare/v1.5.5...HEAD
+[1.5.5]: https://github.com/dagnazty/awokxdag/compare/v1.5.4...v1.5.5
+[1.5.4]: https://github.com/dagnazty/awokxdag/compare/v1.5.3...v1.5.4
+[1.5.3]: https://github.com/dagnazty/awokxdag/compare/v1.5.2...v1.5.3
+[1.5.2]: https://github.com/dagnazty/awokxdag/compare/v1.5.1...v1.5.2
+[1.5.1]: https://github.com/dagnazty/awokxdag/compare/v1.4.4...v1.5.1
 [1.4.4]: https://github.com/dagnazty/awokxdag/compare/v1.4.3...v1.4.4
 [1.4.3]: https://github.com/dagnazty/awokxdag/compare/v1.4.2...v1.4.3
 [1.4.2]: https://github.com/dagnazty/awokxdag/compare/v1.4.1...v1.4.2

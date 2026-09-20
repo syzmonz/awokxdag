@@ -5,6 +5,24 @@ import os from 'node:os';
 import path from 'node:path';
 import { build, renderMarkdown } from './build.mjs';
 
+test('Remote UI parses source-prefixed fleet status per target', async () => {
+  const html = await readFile(new URL('./public/control.html', import.meta.url), 'utf8');
+  assert.match(html, /const source = dv\.getUint8\(0\)/);
+  assert.match(html, /dv\.byteLength >= 25/);
+  assert.match(html, /fleetActive = dv\.getUint8\(20\)/);
+  assert.match(html, /members = dv\.getUint8\(21\)/);
+  assert.match(html, /code = dv\.getUint16\(22, true\)/);
+  assert.match(html, /statuses:\[\{\},\{\}\]/);
+  assert.match(html, /Screen chip:.*fleetDescription/s);
+});
+
+test('Remote wardrive export stays aligned with firmware WiGLE 1.6 rows', async () => {
+  const html = await readFile(new URL('./public/control.html', import.meta.url), 'utf8');
+  assert.match(html, /WigleWifi-1\.6,appRelease=AxD,model=ESP32,release=1\.5\.5/);
+  assert.match(html, /MAC,SSID,AuthMode,FirstSeen,Channel,Frequency,RSSI,CurrentLatitude,CurrentLongitude,AltitudeMeters,AccuracyMeters,RCOIs,MfgrId,Type/);
+  assert.doesNotMatch(html, /WigleWifi_1\.4/);
+});
+
 test('Markdown supports tables, safe HTML, stable unique anchors, and document links', () => {
   const {html, headings} = renderMarkdown('## Setup\n\n## Setup\n\n[Notes](CHANGELOG.md#100---2026-01-01)\n\n[Link mode](docs/link-mode.md)\n\n| Pin | Use |\n| --- | --- |\n| 3 | Touch |\n\n<script>alert(1)</script>\n\n[bad](javascript:alert%281%29)\n\n- [x] Done', 'README.md', new Set(['README.md','CHANGELOG.md','docs/link-mode.md']));
   assert.deepEqual(headings.map(h => h.id), ['setup','setup-1']);

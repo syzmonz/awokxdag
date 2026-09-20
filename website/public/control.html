@@ -427,7 +427,10 @@
     <div class="card">
       <div class="card-title">
         <span>Active Node Telemetry</span>
-        <span id="tool-badge" class="badge badge-lime">–</span>
+        <div class="row" style="gap:6px;">
+          <span id="target-badge" class="badge badge-blue">Screen Chip</span>
+          <span id="tool-badge" class="badge badge-lime">–</span>
+        </div>
       </div>
       <div class="stats">
         <div class="stat-box">
@@ -442,6 +445,12 @@
           <div class="k">Active Tool</div>
           <div id="tool" class="v" style="font-size:14px; margin-top:3px; color:var(--lime);">–</div>
         </div>
+      </div>
+
+      <!-- Quick Dual-Target Breakdown -->
+      <div class="row" style="margin-top:8px; padding-top:8px; border-top:1px solid var(--line); font-size:12px; color:var(--muted); justify-content:space-between;">
+        <span>📺 Screen: <b id="screen-quick-counts" style="color:#fff;">0 APs · 0 BLE</b></span>
+        <span>🌉 Bridge: <b id="bridge-quick-counts" style="color:#fff;">0 APs · 0 BLE</b></span>
       </div>
 
       <!-- GPS Panel -->
@@ -653,6 +662,22 @@
         <div class="k" id="fleet-bridge-info">This bridge: waiting for status</div>
       </div>
 
+      <!-- Fleet Scanned Counters Breakdown -->
+      <div class="stats" style="margin-top:12px;">
+        <div class="stat-box">
+          <div class="k">Screen Chip Scanned</div>
+          <div id="fleet-screen-counts" class="v" style="font-size:15px; color:var(--accent);">0 APs · 0 BLE</div>
+        </div>
+        <div class="stat-box">
+          <div class="k">Bridge Chip Scanned</div>
+          <div id="fleet-bridge-counts" class="v" style="font-size:15px; color:var(--purple);">0 APs · 0 BLE</div>
+        </div>
+        <div class="stat-box">
+          <div class="k">Fleet Total Sighted</div>
+          <div id="fleet-total-counts" class="v" style="font-size:15px; color:var(--lime);">0 APs · 0 BLE</div>
+        </div>
+      </div>
+
       <div class="k" style="margin-top:10px;">
         💡 <b>Multi-node setup:</b> Start Fleet on one device (Coordinator). Then switch to other nodes or chips and tap Join Fleet. Sightings from all nodes merge automatically into your wardrive session.
       </div>
@@ -689,10 +714,10 @@ const TOOL_NAMES = {
   4: "Packet Monitor", 5: "Deauth Watch", 6: "Clients", 7: "Wardrive",
   8: "Wardrive Stop", 9: "GPS Status", 10: "WPS Scan", 11: "Hidden SSID",
   12: "Camera Scan", 13: "Security Audit", 14: "BLE Trackers", 15: "Harvester",
-  16: "Probe Intel", 17: "Saved APs", 20: "Beacon Flood", 21: "Evil Portal",
+  16: "Probe Intel", 17: "Saved APs", 19: "Wardrive", 20: "Beacon Flood", 21: "Evil Portal",
   22: "Evil Twin", 23: "Probe Lure", 24: "Auth Flood", 30: "Rogue Watch",
   31: "BLE Spam Watch", 32: "Karma Watch", 33: "Beacon Watch", 34: "Advanced Watch",
-  40: "Locator", 41: "Status", 42: "Files", 50: "List Wi-Fi",
+  40: "Locator", 41: "Status", 42: "Files", 43: "Fleet Wardrive", 50: "List Wi-Fi",
   51: "Select Wi-Fi", 52: "Deauth", 53: "Grab Handshake", 54: "Track RSSI",
   60: "Fleet Start", 61: "Fleet Join", 62: "Fleet Leave", 255: "Home / Idle"
 };
@@ -755,12 +780,16 @@ function refreshTargetButtons(){
 // ---- connection list ----------------------------------------------------
 function connSummary(c){
   if (!c.connected) return "disconnected";
-  const s = c.statuses[TGT_BRIDGE] || {};
+  const sB = c.statuses[TGT_BRIDGE] || {};
+  const sS = c.statuses[TGT_SCREEN] || {};
+  const s = c.statuses[target] || sB;
   let parts = [];
-  if (s.fleetShort) parts.push(s.fleetShort);
-  parts.push("wifi " + (s.wifi ?? "–"));
-  parts.push("ble " + (s.ble ?? "–"));
-  if (s.gpsFix) parts.push("GPS FIX");
+  if (s.fleetShort || sB.fleetShort || sS.fleetShort) parts.push(s.fleetShort || sB.fleetShort || sS.fleetShort);
+  const w = (s.wifi != null && s.wifi > 0) ? s.wifi : (sS.wifi ?? sB.wifi ?? "–");
+  const b = (s.ble != null && s.ble > 0) ? s.ble : (sS.ble ?? sB.ble ?? "–");
+  parts.push("wifi " + w);
+  parts.push("ble " + b);
+  if (sS.gpsFix || sB.gpsFix) parts.push("GPS FIX");
   return parts.join(" · ");
 }
 
@@ -975,12 +1004,15 @@ function parseStatus(dv, c){
 
 function fleetDescription(s){
   if (!s || !s.seen) return "waiting for status";
-  if (!s.fleetActive) return "Fleet off";
-  if (s.listening) return "joining — waiting for coordinator";
+  const counts = (s.wifi != null || s.ble != null)
+    ? ` · ${(s.wifi ?? 0).toLocaleString()} APs · ${(s.ble ?? 0).toLocaleString()} BLE`
+    : "";
+  if (!s.fleetActive) return "Fleet off" + counts;
+  if (s.listening) return "joining — waiting for coordinator" + counts;
   const nodes = s.members + " node" + (s.members===1 ? "" : "s");
   return (s.coord ? "coordinator" : "member") + " · code " +
     String(s.code).padStart(4,"0") + " · " + nodes +
-    (s.fleetRunning ? " · logging" : " · ready");
+    (s.fleetRunning ? " · logging" : " · ready") + counts;
 }
 
 function renderStats(){
@@ -988,6 +1020,12 @@ function renderStats(){
   if (!c){
     $("wifi").textContent = "–"; $("ble").textContent = "–";
     $("tool").textContent = "–"; $("tool-badge").textContent = "–";
+    if ($("target-badge")) $("target-badge").textContent = target===TGT_SCREEN ? "Screen Chip" : "Bridge Chip";
+    if ($("screen-quick-counts")) $("screen-quick-counts").textContent = "0 APs · 0 BLE";
+    if ($("bridge-quick-counts")) $("bridge-quick-counts").textContent = "0 APs · 0 BLE";
+    if ($("fleet-screen-counts")) $("fleet-screen-counts").textContent = "0 APs · 0 BLE";
+    if ($("fleet-bridge-counts")) $("fleet-bridge-counts").textContent = "0 APs · 0 BLE";
+    if ($("fleet-total-counts")) $("fleet-total-counts").textContent = "0 APs · 0 BLE";
     $("gps").textContent = "GPS: –"; $("gps-badge").textContent = "NO FIX"; $("gps-badge").className = "badge badge-bad";
     $("gps-sats").textContent = "0 satellites";
     $("gps-action").hidden = true;
@@ -998,18 +1036,36 @@ function renderStats(){
     return;
   }
   const s = c.statuses[target] || {};
+  const sScreen = c.statuses[TGT_SCREEN] || {};
+  const sBridge = c.statuses[TGT_BRIDGE] || {};
+
+  // Update target badge
+  if ($("target-badge")) {
+    $("target-badge").textContent = target === TGT_SCREEN ? "Screen Chip" : "Bridge Chip";
+    $("target-badge").className = target === TGT_SCREEN ? "badge badge-blue" : "badge badge-purple";
+  }
+
+  // Primary active target counters
   $("wifi").textContent = s.wifi != null ? s.wifi.toLocaleString() : "–";
   $("ble").textContent  = s.ble != null ? s.ble.toLocaleString() : "–";
 
+  // Dual-target quick breakdown in Tab 1
+  const scrW = sScreen.wifi != null ? sScreen.wifi.toLocaleString() : "0";
+  const scrB = sScreen.ble != null ? sScreen.ble.toLocaleString() : "0";
+  const brgW = sBridge.wifi != null ? sBridge.wifi.toLocaleString() : "0";
+  const brgB = sBridge.ble != null ? sBridge.ble.toLocaleString() : "0";
+  if ($("screen-quick-counts")) $("screen-quick-counts").textContent = `${scrW} APs · ${scrB} BLE`;
+  if ($("bridge-quick-counts")) $("bridge-quick-counts").textContent = `${brgW} APs · ${brgB} BLE`;
+
   // Decode tool opcode into human readable name
-  if (s.tool != null) {
-    const toolName = TOOL_NAMES[s.tool] || ("Opcode #" + s.tool);
-    $("tool").textContent = toolName;
-    $("tool-badge").textContent = "#" + s.tool + " " + toolName;
-  } else {
-    $("tool").textContent = "–";
-    $("tool-badge").textContent = "–";
+  let toolName = "–";
+  if (s.fleetRunning) {
+    toolName = "Fleet Wardrive";
+  } else if (s.tool != null) {
+    toolName = (s.tool === 19 || s.tool === 7) ? "Wardrive" : (TOOL_NAMES[s.tool] || ("Opcode #" + s.tool));
   }
+  $("tool").textContent = toolName;
+  $("tool-badge").textContent = (s.tool != null ? ("#" + s.tool + " ") : "") + toolName;
 
   // Enhanced GPS Display with Maps Link
   if (s.gpsFix && s.lat && s.lon) {
@@ -1034,6 +1090,15 @@ function renderStats(){
     "Screen chip: " + fleetDescription(c.statuses[TGT_SCREEN]);
   $("fleet-bridge-info").textContent =
     "This bridge: " + fleetDescription(c.statuses[TGT_BRIDGE]);
+
+  // Fleet scanned breakdown boxes in Tab 5
+  const scWNum = sScreen.wifi ?? 0, scBNum = sScreen.ble ?? 0;
+  const brWNum = sBridge.wifi ?? 0, brBNum = sBridge.ble ?? 0;
+  if ($("fleet-screen-counts")) $("fleet-screen-counts").textContent = `${scWNum.toLocaleString()} APs · ${scBNum.toLocaleString()} BLE`;
+  if ($("fleet-bridge-counts")) $("fleet-bridge-counts").textContent = `${brWNum.toLocaleString()} APs · ${brBNum.toLocaleString()} BLE`;
+  const totWNum = sScreen.coord ? scWNum : (sBridge.coord ? brWNum : scWNum + brWNum);
+  const totBNum = sScreen.coord ? scBNum : (sBridge.coord ? brBNum : scBNum + brBNum);
+  if ($("fleet-total-counts")) $("fleet-total-counts").textContent = `${totWNum.toLocaleString()} APs · ${totBNum.toLocaleString()} BLE`;
 
   if (s.fleetActive) {
     if (s.listening) {
@@ -1174,7 +1239,7 @@ updateEnabled(); renderConns(); renderStats();
 async function downloadWardriveCsv(){
   if (!wardriveRows.length){ log("no wardrive rows yet"); return; }
   const header =
-    "WigleWifi-1.6,appRelease=AxD,model=ESP32,release=1.5.4,device=AxD,display=none,board=AxD Bridge,brand=AxD\n" +
+    "WigleWifi-1.6,appRelease=AxD,model=ESP32,release=1.5.5,device=AxD,display=none,board=AxD Bridge,brand=AxD\n" +
     "MAC,SSID,AuthMode,FirstSeen,Channel,Frequency,RSSI,CurrentLatitude,CurrentLongitude,AltitudeMeters,AccuracyMeters,RCOIs,MfgrId,Type\n";
   const text = header + wardriveRows.join("\n") + "\n";
   const fname = "wardrive-" + Date.now() + ".csv";
