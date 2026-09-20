@@ -36,7 +36,7 @@ Both live on page 1 of Settings, and there is added page navigation buttons to a
 - **Batt** sets your battery size in mAh. Tap to change between 500mAh up to 5000mAh.
   Set this to your actual battery size, for example 2000mAh.
 - **Batt Tune** is a calibration dial from 50% to 150%, default 100%. It scales
-  the current estimate up or down. Use it after a test run (see Calibration).
+  the current estimate up or down, and can be changed in steps of 5%. Use it after a test run (see Calibration).
 
 Changing Batt resets the running count, because the old count no longer matches
 the new selected battery size. Changing Batt Tune does not reset it.
@@ -81,7 +81,7 @@ your board, so the number can be off. To dial it in:
 4. If it died sooner than the gauge expected, raise Batt Tune. If it lasted
    longer, lower Batt Tune.
 
-Repeat until the gauge roughly matches real runtime. One idle run is enough for a
+Repeat until the gauge roughly matches real runtime. One run of what you do the most (scanning, transmitting or lord help us idling) is enough for a
 good baseline.
 
 ## Limits
