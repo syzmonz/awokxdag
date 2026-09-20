@@ -2,13 +2,13 @@
 
 # ALL CREDITS BELONG TO DAGNAZTY. THIS IS NOT MY FIRMWARE. PLEASE SEE ORIGINAL AT https://github.com/dagnazty/awokxdag
 
-## Battery Capacity Info: This version of AxD is currently built against 1.5.2, it includes battery settings and info, & extra small features that I personally needed.
+## Battery Capacity Info: This version of AxD is currently built against 1.5.5, it includes battery settings and info, & extra small features that I personally needed.
 ## Please read documentation at [BattInfo.MD](BattInfo.md)
 
 **Dual-band Wi-Fi / BLE penetration-testing toolkit for the ESP32-C5** (AWOK Dual
 C5, white-USB screen board with an ILI9341 touchscreen).
 
-- **Version:** custom 1.5.2-syz.1 - based on upstream 1.5.2
+- **Version:** custom 1.5.5-syz.1 - based on upstream 1.5.5
 - **Author:** dag nazty
 - **Target:** ESP32-C5 Dev Module, 8 MB flash, PSRAM, microSD
 - **Changelog:** [CHANGELOG.md](CHANGELOG.md)
@@ -337,100 +337,6 @@ Probe Lure) and live counts stream back to the phone, tagged with the chip that
 produced them. The bridge sweeps every channel when relaying so a command reaches
 the screen chip even while it is hopping. The two chips talk over ESP-NOW; the shared wire format is
 `AWOKxDAG/link_protocol.h`.
-
-### Dual C5 Mini
-
-Install **Adafruit ST7735 and ST7789 Library** in addition to the libraries above,
-then build and package the Mini profile:
-
-```bash
-python3 scripts/build_firmware.py dual-c5-mini
-```
-
-Outputs are in `build/dual-c5-mini-1.4.4/`, with explicit board names and
-`SHA256SUMS`. This command only compiles and packages; it does not flash.
-The Mini uses a native 128 × 128 layout with readable text, highlighted menu
-rows, wrapped details, and compact charts. Up/down moves through rows, center
-selects, right jumps to actions, and left returns to the top of the screen. At
-boot it shows the same AWOK logo as the Touch board, downscaled to 96 × 128 by
-`scripts/gen_mini_boot.py` (re-run with `--threshold` to retune the 1-bit art).
-Use `dual-c5-touch` with the same script to package the default Touch build.
-
-### Original ESP32 boards (2.4 GHz)
-
-The original **Dual ESP32 Touch v1/v2/v3** and **Dual ESP32 Mini v1/v2/v3**
-profiles target the classic **ESP32 Dev Module** (4 MB flash, `huge_app`
-partition, PSRAM disabled) and add the **Adafruit ST7735 and ST7789 Library** for
-the Mini panels. Package any of them with the same script:
-
-```bash
-python3 scripts/build_firmware.py dual-esp32-touch-v1   # or -v2 / -v3
-python3 scripts/build_firmware.py dual-esp32-mini-v1    # or -v2 / -v3
-```
-
-## Hardware map (Dual C5 Touch)
-
-| Function | GPIO |
-| --- | ---: |
-| SPI SCK / MISO / MOSI | 6 / 2 / 7 |
-| ILI9341 CS / DC / Reset | 23 / 24 / (none) |
-| Backlight | 8 (active high) |
-| XPT2046 touch CS | 3 |
-| SD card CS | 10 |
-| GPS UART1 RX / TX | 14 / 13 @ 115200 NMEA |
-| Battery ADC | unset (`kBatteryAdc = -1`) |
-
-Pins and touch calibration live in `board_pins.h`.
-
-## Hardware map (Dual C5 Mini)
-
-| Function | GPIO |
-| --- | ---: |
-| SPI SCK / MISO / MOSI | 6 / 2 / 7 |
-| ST7735 CS / DC / Reset | 23 / 24 / (none) |
-| Backlight | 5 (active low) |
-| Buttons Left / Center / Up / Right / Down | 0 / 1 / 4 / 8 / 9 |
-| SD card CS | 10 |
-| GPS UART1 RX / TX | 14 / 13 @ 115200 NMEA |
-| Battery ADC | unset (`kBatteryAdc = -1`) |
-
-The Mini shares the SPI bus, display CS/DC, SD, and GPS wiring with the Touch
-board; it swaps the ILI9341 + XPT2046 touchscreen for a 128 × 128 ST7735 driven
-by five buttons, and its backlight is active-low on GPIO 5. Selected by building
-with `AWOK_DUAL_C5_MINI` (via `scripts/build_firmware.py dual-c5-mini`). This
-mapping was recovered from the bundled Mini firmware (see the comments in
-`board_pins.h`) and is confirmed working on hardware.
-
-## Hardware map (original ESP32 Touch v1/v2/v3)
-
-| Function | GPIO |
-| --- | ---: |
-| SPI SCK / MISO / MOSI | 18 / 19 / 23 |
-| ILI9341 CS / DC / Reset | 17 / 16 / 5 |
-| Backlight | 32 (active high) |
-| XPT2046 touch CS | 21 |
-| SD card CS | 12 (v1) · 14 (v2, v3) |
-| GPS UART2 RX / TX | 4 / 13 @ 115200 NMEA (selectable) |
-| Battery ADC | unset (`kBatteryAdc = -1`) |
-
-## Hardware map (original ESP32 Mini v1/v2/v3)
-
-| Function | GPIO |
-| --- | ---: |
-| SPI SCK / MISO / MOSI | 18 / 19 / 23 |
-| ST7735 CS / DC / Reset | 17 / 16 / 5 |
-| Backlight | 32 (active low) |
-| Buttons Left / Center / Up / Right / Down | 13 / 34 / 36 / 39 / 35 |
-| SD card CS | 4 |
-| GPS UART2 RX / TX | 21 / 22 @ 9600 NMEA (selectable) |
-| Battery ADC | unset (`kBatteryAdc = -1`) |
-
-These original 2.4 GHz-only ESP32 profiles share the classic display bus and are
-selected with `AWOK_DUAL_ESP32_TOUCH_V<n>` / `AWOK_DUAL_ESP32_MINI_V<n>`. On the
-Mini, GPIO34–39 are **input-only with no internal pull-ups** (Center / Up / Right
-/ Down rely on the board's external biasing; Left on GPIO13 uses `INPUT_PULLUP`).
-Pin sources and validation status: [original Touch](docs/dual-esp32-touch.md),
-[original Mini](docs/dual-esp32-mini.md). Link pairing: [Link Mode](docs/link-mode.md).
 
 ## Collection capacity
 
