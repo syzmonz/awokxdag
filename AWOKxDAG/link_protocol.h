@@ -28,13 +28,15 @@ enum LinkMsgType : uint8_t {
   kLinkMsgTelem = 3,       // running counts + channel + session id (status back)
   kLinkMsgCommand = 4,     // bridge -> screen: run a tool (opcode in `reserved`)
   kLinkMsgWifiResult = 5,  // screen -> bridge: one scanned AP (AxdWifiResult)
-  kLinkMsgBleResult = 9,
+  kLinkMsgBleResult = 13,
   // Fleet Wardrive (N linked nodes splitting the channel plan into one CSV):
   kLinkMsgFleetInvite = 6,    // coordinator -> all: join my session (LinkPacket)
   kLinkMsgFleetJoin = 7,      // member -> coordinator: joining (caps in flags)
   kLinkMsgFleetRoster = 8,    // coordinator -> all: the roster (FleetRoster)
   kLinkMsgFleetWardriveRow = 9,  // member -> coordinator: one WiGLE row
   kLinkMsgFleetAck = 10,      // coordinator -> member: rows up to seq received
+  kLinkMsgFleetHuntObservation = 11,  // member -> coordinator: target hunt observation
+  kLinkMsgFleetHuntResult = 12,       // coordinator/screen -> bridge: hunt solution
 };
 
 // One ESP-NOW frame. POD, 36 bytes on every supported ABI, copied verbatim.
@@ -190,6 +192,38 @@ enum AxdSource : uint8_t {
   kSourceBridge = 0,
   kSourceScreen = 1,
   kSourceWardrive = 2,  // results char carries a WiGLE CSV text row (bridge)
+  kSourceHunt = 3,      // results char carries a Fleet Hunter text row
+};
+
+// Multi-node Fleet Hunter observation frame (ESP-NOW)
+struct FleetHuntObservation {
+  uint32_t magic = kLinkMagic;
+  uint8_t version = kLinkProtoVersion;
+  uint8_t type = kLinkMsgFleetHuntObservation;
+  uint8_t channel = 0;
+  int8_t rssi = -127;
+  uint8_t bssid[6] = {0};
+  float lat = 0.0f;
+  float lon = 0.0f;
+  uint32_t timestampMs = 0;
+  uint8_t nodeIndex = 0;
+  uint8_t reserved = 0;
+};
+
+// Solved Fleet Hunter telemetry frame (ESP-NOW screen -> bridge)
+struct FleetHuntResult {
+  uint32_t magic = kLinkMagic;
+  uint8_t version = kLinkProtoVersion;
+  uint8_t type = kLinkMsgFleetHuntResult;
+  uint8_t bssid[6] = {0};
+  int8_t rssi = -127;
+  uint8_t points = 0;
+  float lat = 0.0f;
+  float lon = 0.0f;
+  float distanceM = 0.0f;
+  float bearingDeg = 0.0f;
+  float confidenceM = 0.0f;
+  char ssid[33] = {0};
 };
 
 enum AxdCommand : uint8_t {
@@ -237,6 +271,7 @@ enum AxdCommand : uint8_t {
   kAxdCmdDeauthSel = 52,    // deauth the selected AP
   kAxdCmdGrabSel = 53,      // handshake/PMKID grab on the selected AP
   kAxdCmdTrackSel = 54,     // RSSI-track the selected AP
+  kAxdCmdFleetHunt = 55,    // multi-node target hunt / trilateration on selected AP
   // Fleet Wardrive control (multi-node; joining is always deliberate).
   kAxdCmdFleetStart = 60,   // become coordinator + start the fleet wardrive
   kAxdCmdFleetJoin = 61,    // arm this chip to auto-join a coordinator's fleet

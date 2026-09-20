@@ -113,7 +113,7 @@ constexpr uint8_t kDeauthHopChannels[] = {
 constexpr int kDeauthHopChannelCount =
     static_cast<int>(sizeof(kDeauthHopChannels) / sizeof(kDeauthHopChannels[0]));
 constexpr int kMaxDeauthTargets = 8;
-constexpr char kVersion[] = "1.5.5-syz.1";
+constexpr char kVersion[] = "1.6.0-syz.1";
 constexpr char kAuthor[] = "dag nazty";
 constexpr uint32_t kHandshakeRedrawMs = 500;
 constexpr uint32_t kHandshakePulseMs = 2000;
@@ -288,6 +288,7 @@ struct AdvancedBleFingerprint {
 };
 
 constexpr uint16_t kBackground = ILI9341_BLACK;
+constexpr uint16_t kForeground = ILI9341_WHITE;
 constexpr uint16_t kPanel = 0x1082;
 constexpr uint16_t kAccent = ILI9341_CYAN;
 constexpr uint16_t kMuted = 0x7BEF;
@@ -351,7 +352,8 @@ enum class View {
   kNetworkHost,
   kNetworkDetail,
   kWardriveUpload,
-  kWardriveUploadFiles
+  kWardriveUploadFiles,
+  kFleetHunt
 };
 
 // ---- Link Mode (ESP-NOW pairing of two AxD units) -----------------------

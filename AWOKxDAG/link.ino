@@ -64,6 +64,11 @@ void onLinkRecv(const esp_now_recv_info_t* info, const uint8_t* data, int len) {
     fleetOnAckFrame(data);
     return;
   }
+  if (type == kLinkMsgFleetHuntObservation &&
+      len == static_cast<int>(sizeof(FleetHuntObservation))) {
+    huntOnObservationFrame(data);
+    return;
+  }
 
 #ifdef AWOK_HEADLESS
   // Bridge phone-relay role: forward a screen chip's telem/results to the phone.
@@ -100,6 +105,25 @@ void onLinkRecv(const esp_now_recv_info_t* info, const uint8_t* data, int len) {
     size_t sl = strnlen(r.ssid, 32);
     memcpy(blob + 11, r.ssid, sl);
     bridgeNotifyResult(kSourceScreen, blob, 11 + sl);
+    return;
+  } else if (type == kLinkMsgFleetHuntResult &&
+             len == static_cast<int>(sizeof(FleetHuntResult))) {
+    FleetHuntResult r;
+    memcpy(&r, data, sizeof(r));
+    char bssidStr[20];
+    snprintf(bssidStr, sizeof(bssidStr), "%02X:%02X:%02X:%02X:%02X:%02X",
+             r.bssid[0], r.bssid[1], r.bssid[2], r.bssid[3], r.bssid[4], r.bssid[5]);
+    char rowBuf[128];
+    int rlen = snprintf(rowBuf, sizeof(rowBuf), "$HUNT,%s,%s,%.6f,%.6f,%.1f,%.1f,%.1f,%d,%u",
+                        bssidStr, r.ssid,
+                        r.lat, r.lon,
+                        r.distanceM, r.bearingDeg,
+                        r.confidenceM,
+                        r.rssi,
+                        r.points);
+    if (rlen > 0) {
+      bridgeNotifyResult(kSourceHunt, reinterpret_cast<const uint8_t*>(rowBuf), rlen);
+    }
     return;
   }
 #endif
@@ -1049,6 +1073,9 @@ void linkDispatchCommand(uint8_t op, uint8_t arg) {
       break;
     case kAxdCmdTrackSel:
       if (selectedWifi.bssid.length()) beginWifiSignalMonitor();
+      break;
+    case kAxdCmdFleetHunt:
+      if (selectedWifi.bssid.length()) startFleetHunt();
       break;
     // Fleet control (phone or on-device buttons)
     case kAxdCmdFleetStart: fleetStartWardrive(); break;
