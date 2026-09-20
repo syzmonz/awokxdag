@@ -6,8 +6,8 @@
 // BSSID other than the one that was saved. rogueWatchActive lives in the main
 // sketch (read by the input tab).
 
-constexpr int kMaxRogueAps = 32;
-constexpr int kRogueHitQueueSlots = 24;
+constexpr int kMaxRogueAps = AwokPins::kDualBand ? 32 : 16;
+constexpr int kRogueHitQueueSlots = AwokPins::kDualBand ? 24 : 12;
 constexpr uint32_t kRogueHopIntervalMs = 300;
 constexpr uint32_t kRogueRedrawMs = 700;
 constexpr char kRogueLogCsvPath[] = "/awokxdag/rogue_log.csv";

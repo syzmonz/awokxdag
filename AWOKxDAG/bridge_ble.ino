@@ -100,7 +100,9 @@ class BridgeCmdCallbacks : public NimBLECharacteristicCallbacks {
     if (v.length() == 0) return;
     g_bridgePendOp = v.data()[0];
     g_bridgePendArg = v.length() > 1 ? v.data()[1] : 0;
-    g_bridgePendTarget = v.length() > 2 ? v.data()[2] : kTargetBridge;
+    g_bridgePendTarget = v.length() > 2
+                             ? v.data()[2]
+                             : static_cast<uint8_t>(kTargetBridge);
     g_bridgeCmdPending = true;  // serviced on the main loop
   }
 };

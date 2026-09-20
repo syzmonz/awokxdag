@@ -1,5 +1,32 @@
 # Third-party references and notices
 
+## Piglet — Hamspiced
+
+Fleet Wardrive's explicit coordinator/node ESP-NOW topology was informed by
+[Piglet](https://github.com/Hamspiced/piglet) by **Hamspiced**. Piglet's
+Core/Node behavior provided the reference for keeping a user-selected Core
+authoritative while nodes discover, join, heartbeat, and reconnect.
+
+AxD's fleet wire protocol, roster and channel assignment, row aggregation,
+display UI, and web integration are implemented for AxD; Piglet source code was
+not copied into this repository. Piglet is distributed under the
+[Creative Commons Attribution-NonCommercial-ShareAlike 4.0 International
+license](https://github.com/Hamspiced/piglet/blob/main/LICENSE). Thanks to
+Hamspiced for publishing Piglet and its ESP-NOW design openly.
+
+## ESP32 Marauder — justcallmekoko
+
+AxD's direct wardrive upload workflow references ESP32 Marauder's documented
+network/file/destination flow and SD credential-file convention. AxD consolidates
+the credentials into its own `wardrive_upload.txt` format; its screen, multipart
+streaming client, TLS validation, response handling, and audit integration are
+newly implemented for AxD, and no uploader source body was copied.
+
+[ESP32 Marauder](https://github.com/justcallmekoko/ESP32Marauder) is maintained
+by **justcallmekoko (Justin Hazard)** and distributed under GPL-3.0. Thanks for
+publishing the hardware mappings, radio lifecycle work, and direct-upload user
+workflow that informed this firmware.
+
 ## Evil-M5Project — 7h30th3r0n3
 
 The Network Tools and Flipper-like BLE service hints reference the feature designs

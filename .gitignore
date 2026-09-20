@@ -4,3 +4,5 @@
 website/node_modules/
 website/dist/
 tests/host/test_network_parse
+/wardrive_upload.txt
+/AWOKxDAG/wardrive_upload.txt

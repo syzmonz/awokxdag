@@ -9,7 +9,7 @@
 // extend; expect some false positives and negatives.
 
 constexpr int kMaxCameras = kResultCapacity;
-constexpr int kCameraHitQueueSlots = 32;
+constexpr int kCameraHitQueueSlots = AwokPins::kDualBand ? 32 : 16;
 constexpr uint32_t kCameraHopIntervalMs = 300;
 constexpr uint32_t kCameraRedrawMs = 700;
 

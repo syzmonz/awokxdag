@@ -7,7 +7,7 @@
 // hiddenRevealActive lives in the main sketch (read by the input tab).
 
 constexpr int kMaxHidden = kResultCapacity;
-constexpr int kHiddenHitQueueSlots = 24;
+constexpr int kHiddenHitQueueSlots = AwokPins::kDualBand ? 24 : 12;
 constexpr uint32_t kHiddenHopIntervalMs = 300;
 constexpr uint32_t kHiddenRedrawMs = 700;
 // HiddenHit and HiddenEntry are declared in awok_common.h.

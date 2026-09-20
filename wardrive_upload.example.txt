@@ -1,0 +1,7 @@
+# Copy this file to the root of the SD card as wardrive_upload.txt.
+# It may instead be stored at /awokxdag/wardrive_upload.txt.
+# Keep it private: these values authorize uploads to your accounts.
+
+wigle_api_name=PASTE_YOUR_WIGLE_API_NAME_HERE
+wigle_api_token=PASTE_YOUR_WIGLE_API_TOKEN_HERE
+wdgwars_api_key=PASTE_YOUR_64_CHARACTER_HEXADECIMAL_WDGWARS_KEY_HERE

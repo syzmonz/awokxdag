@@ -5,7 +5,7 @@
 // lives in the main sketch (read by the input tab); the rest is local here.
 
 constexpr int kMaxWps = kResultCapacity;
-constexpr int kWpsHitQueueSlots = 24;
+constexpr int kWpsHitQueueSlots = AwokPins::kDualBand ? 24 : 12;
 constexpr uint32_t kWpsHopIntervalMs = 300;
 constexpr uint32_t kWpsRedrawMs = 700;
 

@@ -11,11 +11,12 @@ constexpr uint32_t kNetResponseMs = 2500;
 const uint16_t kNetPorts[] = {21,22,23,25,53,80,110,139,143,443,445,554,631,1883,3306,3389,8080,8443,9100};
 const uint16_t kNetCameraPorts[] = {554,8554,80,8000,8080,8899};
 const uint16_t kNetPrinterPorts[] = {9100,631,515};
-const char* const kNetMenu[] = {"Connect / Wi-Fi", "Discover Hosts", "TCP Ports", "LAN Cameras", "Printers", "SIP Services", "UPnP Mappings", "Last Results"};
+const char* const kNetMenu[] = {"Connect / Wi-Fi", "Discover Hosts", "TCP Ports", "LAN Cameras", "Printers", "SIP Services", "UPnP Mappings", "Last Results", "Wardrive Upload"};
 NetHost* netHosts = nullptr;
 NetResult* netResults = nullptr;
 char* netResponse = nullptr;
 bool netOpen = false;
+bool netSetupReturnUpload = false;
 NetJob netJob = NetJob::None;
 NetJob netLastJob = NetJob::None;
 NetStage netStage = NetStage::Idle;
@@ -38,6 +39,51 @@ NetworkParse::Url netUpnpUrl;
 String netUpnpService;
 NetSummary netHostSummary, netResultSummary;
 bool netHostsLimited = false;
+
+static void netFreeWorkspace() {
+  heap_caps_free(netHosts);
+  heap_caps_free(netResults);
+  heap_caps_free(netResponse);
+  netHosts = nullptr; netResults = nullptr; netResponse = nullptr;
+}
+
+static void* netWorkspaceCalloc(size_t count, size_t size) {
+  if (heap_caps_get_total_size(MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT) > 0) {
+    void* external = heap_caps_calloc(
+        count, size, MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (external) return external;
+  }
+  return heap_caps_calloc(count, size,
+                          MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT);
+}
+
+bool netEnsureWorkspace() {
+  if (netHosts && netResults && netResponse) return true;
+  netFreeWorkspace();
+  netHosts = static_cast<NetHost*>(
+      netWorkspaceCalloc(kNetCapacity, sizeof(NetHost)));
+  netResults = static_cast<NetResult*>(
+      netWorkspaceCalloc(kNetCapacity, sizeof(NetResult)));
+  netResponse = static_cast<char*>(netWorkspaceCalloc(kNetResponseBytes + 1, 1));
+  if (netHosts && netResults && netResponse) return true;
+  netFreeWorkspace();
+  return false;
+}
+
+// The TLS stack needs two 16 KiB record buffers plus certificate workspace.
+// Network Tools normally retains about 20 KiB for discovery results. Uploads
+// do not need those tables, so release them before the handshake and recreate
+// them lazily when another LAN tool starts.
+void netReleaseWorkspaceForUpload() {
+  netFreeWorkspace();
+  netHostCount = netResultCount = 0;
+  netSelectedHost = -1; netSelectedResult = 0;
+  netHostSummary = NetSummary{}; netResultSummary = NetSummary{};
+  netLastJob = NetJob::None;
+  netHostsLimited = netLimited = netSubnetLimited = false;
+  netShowHosts = true;
+}
+
 void netSnapshot() {
   NetSummary& summary = netLastJob == NetJob::Hosts ? netHostSummary : netResultSummary;
   summary.job = netLastJob;
@@ -87,9 +133,9 @@ void closeNetworkTools() {
   WiFi.setAutoReconnect(false);
   shutdownWifi();
   netWipe(netPassword); netWipe(netEdit); netSsid = "";
-  free(netHosts); free(netResults); free(netResponse);
-  netHosts = nullptr; netResults = nullptr; netResponse = nullptr;
+  netFreeWorkspace();
   netOpen = false;
+  netSetupReturnUpload = false;
 }
 // Preserve readable large labels when they fit; long IP/service rows and
 // connection controls use the small font instead of overflowing Touch buttons.
@@ -116,7 +162,7 @@ void drawNetworkMenu() {
   drawHeader("NETWORK TOOLS", WiFi.status() == WL_CONNECTED ? WiFi.localIP().toString() : "connect to your test network");
   for (int row = 0; row < 6; ++row) {
     const int item = netMenuPage * 6 + row;
-    if (item >= 8) break;
+    if (item >= 9) break;
     netButton(20, 50 + row * 32, 200, 30, kNetMenu[item]);
   }
   if (netMenuPage) netText(130, clipped(netStatus, 37));
@@ -126,12 +172,7 @@ void openNetworkTools() {
   signalMonitorActive = false;
   if (netOpen) { drawNetworkMenu(); return; }
   releaseBleMemory();
-  netHosts = static_cast<NetHost*>(calloc(kNetCapacity, sizeof(NetHost)));
-  netResults = static_cast<NetResult*>(calloc(kNetCapacity, sizeof(NetResult)));
-  netResponse = static_cast<char*>(malloc(kNetResponseBytes + 1));
-  if (!netHosts || !netResults || !netResponse) {
-    free(netHosts); free(netResults); free(netResponse);
-    netHosts = nullptr; netResults = nullptr; netResponse = nullptr;
+  if (!netEnsureWorkspace()) {
     showRadioError("Network Tools: low memory"); return;
   }
   netOpen = true; netHostCount = netResultCount = 0; netMenuPage = netPage = 0;
@@ -314,6 +355,11 @@ err_t netArpOnTcpip(tcpip_api_call_data* base) {
 }
 void netStartJob(NetJob job, int host) {
   if (netJob != NetJob::None) return;
+  if (!netEnsureWorkspace()) {
+    netStatus = "Low memory; cannot start network tool";
+    drawNetworkMenu();
+    return;
+  }
   if (WiFi.status() != WL_CONNECTED) { netStatus = "Connect before scanning"; drawNetworkSetup(); return; }
   netSessionIp = netIpNumber(WiFi.localIP()); netSessionMask = netIpNumber(WiFi.subnetMask());
   if (!NetworkParse::range(netSessionIp, netSessionMask, netFirst, netLast)) {
@@ -662,6 +708,11 @@ void updateNetworkTools() {
   if (currentView == View::kNetworkResults && millis() - netLastDraw >= 600) { netLastDraw = millis(); drawNetworkResults(); }
 }
 void handleNetworkTouch(int x, int y) {
+  if (currentView == View::kWardriveUpload ||
+      currentView == View::kWardriveUploadFiles) {
+    handleWardriveUploadTouch(x, y);
+    return;
+  }
   if (currentView == View::kNetworkEdit) {
     if (y >= kFooterTop) {
       if (x < 48) { netWipe(netEdit); drawNetworkSetup(); }
@@ -687,7 +738,10 @@ void handleNetworkTouch(int x, int y) {
       return;
     }
     if (y >= kFooterTop) {
-      if (x < 120) drawNetworkMenu(); else { netDisconnect(); drawNetworkSetup(); }
+      if (x < 120) {
+        if (netSetupReturnUpload) drawWardriveUpload();
+        else drawNetworkMenu();
+      } else { netDisconnect(); drawNetworkSetup(); }
     } else if ((y >= 50 && y < 80) || (y >= 90 && y < 120)) {
       netEditPassword = y >= 90; netEdit = netEditPassword ? netPassword : netSsid;
       netKeyPage = 2; drawNetworkEditor();
@@ -720,7 +774,7 @@ void handleNetworkTouch(int x, int y) {
       else { netMenuPage = 1 - netMenuPage; drawNetworkMenu(); }
     } else if (y >= 50 && y < 242 && (y - 50) % 32 < 30) {
       int item = netMenuPage * 6 + (y - 50) / 32;
-      if (item == 0) drawNetworkSetup();
+      if (item == 0) { netSetupReturnUpload = false; drawNetworkSetup(); }
       else if (item == 1) netStartJob(NetJob::Hosts, -1);
       else if (item == 2) netStartJob(NetJob::Ports, -1);
       else if (item == 3) netStartJob(NetJob::Cameras, -1);
@@ -728,6 +782,7 @@ void handleNetworkTouch(int x, int y) {
       else if (item == 5) netStartJob(NetJob::Sip, -1);
       else if (item == 6) netStartJob(NetJob::Upnp, -1);
       else if (item == 7) drawNetworkResults();
+      else if (item == 8) openWardriveUpload();
     }
     return;
   }

@@ -218,6 +218,8 @@ uint32_t wardriveStartMs = 0;
 uint32_t lastWardriveDrawMs = 0;
 bool wardriveCsvReady = false;
 String g_wardriveCsvPath;  // this run's CSV file (a new one is made each start)
+File g_wardriveFile;       // persistent open file handle during wardrive
+uint8_t wardriveBloom[kWardriveBloomFilterBytes] = {0};  // fast O(1) MAC deduplication bitset
 uint8_t wardriveMacs[kMaxWardriveMacs][6];
 int wardriveMacCount = 0;
 uint32_t wardriveBleCount = 0;

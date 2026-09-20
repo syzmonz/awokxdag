@@ -3,217 +3,671 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<title>AxD Remote</title>
+<title>AxD Remote · AWOKxDAG Control</title>
 <style>
-  :root { color-scheme: dark; --bg:#0d1013; --panel:#161b22; --line:#263041;
-          --fg:#e6edf3; --muted:#8b98a5; --accent:#4aa3ff; --good:#3fb950;
-          --bad:#f85149; --warn:#d29922; }
+  :root {
+    color-scheme: dark;
+    --bg: #0a0d12;
+    --panel: #131822;
+    --panel-sub: #19202e;
+    --card: #151b26;
+    --line: #222c3c;
+    --line-active: #354660;
+    --fg: #e6edf3;
+    --muted: #8b98a5;
+    --dim: #556272;
+    --accent: #388bfd;
+    --accent-glow: rgba(56,139,253,0.15);
+    --lime: #d8ff65;
+    --lime-dim: rgba(216,255,101,0.15);
+    --good: #3fb950;
+    --good-dim: rgba(63,185,80,0.15);
+    --bad: #f85149;
+    --bad-dim: rgba(248,81,73,0.15);
+    --warn: #e3b341;
+    --warn-dim: rgba(227,179,65,0.15);
+    --purple: #bc8cff;
+    --purple-dim: rgba(188,140,255,0.15);
+    --radius: 12px;
+    --radius-sm: 8px;
+  }
   * { box-sizing: border-box; }
-  body { margin:0; background:var(--bg); color:var(--fg);
-         font:15px/1.45 system-ui,-apple-system,Segoe UI,Roboto,sans-serif;
-         padding:16px; padding-bottom:40px; }
-  h1 { font-size:20px; margin:0 0 2px; letter-spacing:.5px; }
-  .sub { color:var(--muted); font-size:12px; margin-bottom:14px; }
-  .card { background:var(--panel); border:1px solid var(--line);
-          border-radius:12px; padding:14px; margin-bottom:14px; }
-  .row { display:flex; align-items:center; gap:10px; flex-wrap:wrap; }
-  .dot { width:10px; height:10px; border-radius:50%; background:var(--bad);
-         flex:0 0 auto; }
-  .dot.on { background:var(--good); }
-  button { font:600 15px system-ui; color:var(--fg); background:#1f2733;
-           border:1px solid var(--line); border-radius:10px; padding:12px 14px;
-           cursor:pointer; -webkit-tap-highlight-color:transparent; }
-  button:active { background:#2b3644; }
-  button.primary { background:var(--accent); border-color:var(--accent);
-                   color:#04121f; }
-  button.stop { background:#33191a; border-color:#5c2b2c; color:#ffb4ad; }
-  button:disabled { opacity:.4; }
-  .grid { display:grid; grid-template-columns:1fr 1fr; gap:10px; }
-  .status { font-variant-numeric:tabular-nums; }
-  .k { color:var(--muted); font-size:12px; }
-  .v { font-size:22px; font-weight:700; }
-  .stats { display:grid; grid-template-columns:1fr 1fr 1fr; gap:10px; text-align:center; }
-  #log { font:12px/1.4 ui-monospace,SFMono-Regular,Menlo,monospace;
-         white-space:pre-wrap; word-break:break-word; color:var(--muted);
-         max-height:170px; overflow:auto; }
-  .banner { background:#33191a; border:1px solid #5c2b2c; color:#ffb4ad;
-            border-radius:10px; padding:10px 12px; font-size:13px;
-            margin-bottom:14px; }
-  .net { display:flex; gap:8px; align-items:center; padding:8px 10px;
-         border:1px solid var(--line); border-radius:8px; margin-bottom:6px;
-         cursor:pointer; }
-  .net.sel { border-color:var(--accent); background:#12283f; }
-  .net .nm { flex:1; min-width:0; }
-  .net .ss { font-weight:600; overflow:hidden; text-overflow:ellipsis;
-             white-space:nowrap; }
-  .net .mb { color:var(--muted); font-size:11px;
-             font-variant-numeric:tabular-nums; }
-  .net .rs { color:var(--muted); font-size:12px; white-space:nowrap; }
-  .conn { display:flex; gap:8px; align-items:center; padding:8px 10px;
-          border:1px solid var(--line); border-radius:8px; margin-bottom:6px;
-          cursor:pointer; }
-  .conn.sel { border-color:var(--accent); background:#12283f; }
-  .conn .nm { flex:1; min-width:0; }
-  .conn .ss { font-weight:600; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-  .conn .mb { color:var(--muted); font-size:11px; font-variant-numeric:tabular-nums; }
-  .conn .x { padding:6px 11px; background:#33191a; border-color:#5c2b2c; color:#ffb4ad; }
-  .seg { display:flex; gap:0; border:1px solid var(--line); border-radius:10px; overflow:hidden; }
-  .seg button { flex:1; border:0; border-radius:0; background:var(--card);
-                color:var(--muted); font-weight:600; padding:12px; cursor:pointer; }
-  .seg button.on { background:var(--accent); color:#04121f; }
-  [hidden]{ display:none !important; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--fg);
+    font: 14px/1.5 system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    padding: 14px;
+    padding-bottom: 50px;
+    -webkit-font-smoothing: antialiased;
+  }
+
+  /* Header */
+  header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    margin-bottom: 14px;
+    padding-bottom: 12px;
+    border-bottom: 1px solid var(--line);
+  }
+  .brand { display: flex; align-items: center; gap: 10px; }
+  .brand-logo {
+    width: 32px;
+    height: 32px;
+    background: linear-gradient(135deg, #2b394f 0%, #151c27 100%);
+    border: 1px solid var(--accent);
+    border-radius: 8px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-weight: 800;
+    font-size: 14px;
+    color: var(--lime);
+    box-shadow: 0 0 12px var(--accent-glow);
+  }
+  h1 { font-size: 18px; margin: 0; letter-spacing: .5px; font-weight: 700; color: #fff; }
+  .sub { color: var(--muted); font-size: 11px; margin-top: 2px; }
+
+  /* Navigation Tabs */
+  .tabs {
+    display: flex;
+    gap: 4px;
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    padding: 3px;
+    margin-bottom: 14px;
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+  .tabs::-webkit-scrollbar { display: none; }
+  .tab-btn {
+    flex: 1;
+    min-width: fit-content;
+    background: transparent;
+    border: none;
+    border-radius: var(--radius-sm);
+    padding: 8px 12px;
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--muted);
+    cursor: pointer;
+    white-space: nowrap;
+    transition: all .15s ease;
+  }
+  .tab-btn.active {
+    background: var(--panel-sub);
+    color: #fff;
+    box-shadow: 0 1px 3px rgba(0,0,0,0.3);
+    border: 1px solid var(--line-active);
+  }
+
+  /* Cards */
+  .card {
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    padding: 14px;
+    margin-bottom: 12px;
+    box-shadow: 0 2px 8px rgba(0,0,0,0.2);
+  }
+  .card-title {
+    font-size: 12px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: .6px;
+    color: var(--muted);
+    margin-bottom: 10px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+
+  .row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+  .dot { width: 8px; height: 8px; border-radius: 50%; background: var(--bad); flex: 0 0 auto; }
+  .dot.on { background: var(--good); box-shadow: 0 0 8px var(--good); }
+
+  /* Buttons */
+  button {
+    font: 600 13px system-ui, -apple-system, sans-serif;
+    color: var(--fg);
+    background: var(--panel-sub);
+    border: 1px solid var(--line);
+    border-radius: var(--radius-sm);
+    padding: 10px 14px;
+    cursor: pointer;
+    -webkit-tap-highlight-color: transparent;
+    transition: all .15s ease;
+  }
+  button:active { background: #263143; transform: scale(0.98); }
+  button.primary {
+    background: var(--accent);
+    border-color: var(--accent);
+    color: #04121f;
+    font-weight: 700;
+  }
+  button.primary:active { background: #2874d6; }
+  button.stop {
+    background: var(--bad-dim);
+    border-color: rgba(248,81,73,0.4);
+    color: #ff9994;
+  }
+  button.stop:active { background: rgba(248,81,73,0.35); }
+  button.btn-sm { padding: 5px 10px; font-size: 11px; }
+  button:disabled { opacity: .35; cursor: not-allowed; }
+
+  .grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px; }
+  .grid-3 { display: grid; grid-template-columns: repeat(3, 1fr); gap: 8px; }
+  .grid-4 { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
+
+  /* Status Pills & Indicators */
+  .badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 3px 8px;
+    border-radius: 6px;
+    font-size: 11px;
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+  }
+  .badge-lime { background: var(--lime-dim); color: var(--lime); border: 1px solid rgba(216,255,101,0.3); }
+  .badge-good { background: var(--good-dim); color: var(--good); border: 1px solid rgba(63,185,80,0.3); }
+  .badge-bad { background: var(--bad-dim); color: var(--bad); border: 1px solid rgba(248,81,73,0.3); }
+  .badge-warn { background: var(--warn-dim); color: var(--warn); border: 1px solid rgba(227,179,65,0.3); }
+  .badge-blue { background: var(--accent-glow); color: var(--accent); border: 1px solid rgba(56,139,253,0.3); }
+  .badge-purple { background: var(--purple-dim); color: var(--purple); border: 1px solid rgba(188,140,255,0.3); }
+
+  .status { font-variant-numeric: tabular-nums; }
+  .k { color: var(--muted); font-size: 11px; }
+  .v { font-size: 20px; font-weight: 700; font-variant-numeric: tabular-nums; }
+
+  .stats {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 8px;
+    text-align: center;
+  }
+  .stat-box {
+    background: var(--card);
+    border: 1px solid var(--line);
+    border-radius: var(--radius-sm);
+    padding: 10px 8px;
+  }
+
+  /* GPS Widget */
+  .gps-panel {
+    background: var(--card);
+    border: 1px solid var(--line);
+    border-radius: var(--radius-sm);
+    padding: 10px 12px;
+    margin-top: 10px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+  .gps-coords { font-family: ui-monospace, Menlo, monospace; font-size: 12px; color: #fff; font-weight: 600; }
+  .gps-link { color: var(--accent); text-decoration: none; font-size: 11px; font-weight: 600; display: inline-flex; align-items: center; gap: 4px; }
+  .gps-link:hover { text-decoration: underline; }
+
+  /* Connections List */
+  .conn {
+    display: flex;
+    gap: 10px;
+    align-items: center;
+    padding: 10px 12px;
+    border: 1px solid var(--line);
+    border-radius: var(--radius-sm);
+    margin-bottom: 8px;
+    background: var(--card);
+    cursor: pointer;
+    transition: all .15s ease;
+  }
+  .conn.sel { border-color: var(--accent); background: #122238; box-shadow: 0 0 10px var(--accent-glow); }
+  .conn .nm { flex: 1; min-width: 0; }
+  .conn .ss { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; }
+  .conn .mb { color: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; margin-top: 2px; }
+  .conn .x { padding: 5px 9px; background: var(--bad-dim); border-color: rgba(248,81,73,0.3); color: #ff9994; border-radius: 6px; font-size: 11px; }
+
+  /* Segmented Buttons */
+  .seg { display: flex; border: 1px solid var(--line); border-radius: var(--radius-sm); overflow: hidden; background: var(--bg); }
+  .seg button {
+    flex: 1; border: 0; border-radius: 0; background: transparent;
+    color: var(--muted); font-weight: 600; padding: 10px; cursor: pointer; font-size: 12px;
+  }
+  .seg button.on { background: var(--accent); color: #04121f; font-weight: 700; }
+
+  /* Wi-Fi Networks Filter & List */
+  .filter-bar {
+    display: flex;
+    gap: 8px;
+    margin-bottom: 10px;
+  }
+  .search-input {
+    flex: 1;
+    background: var(--card);
+    border: 1px solid var(--line);
+    border-radius: var(--radius-sm);
+    color: var(--fg);
+    padding: 8px 12px;
+    font-size: 12px;
+    outline: none;
+  }
+  .search-input:focus { border-color: var(--accent); }
+
+  .net-list-scroll {
+    max-height: 280px;
+    overflow-y: auto;
+    margin-bottom: 10px;
+    padding-right: 2px;
+  }
+  .net {
+    display: flex;
+    gap: 10px;
+    align-items: center;
+    padding: 10px 12px;
+    border: 1px solid var(--line);
+    border-radius: var(--radius-sm);
+    margin-bottom: 6px;
+    cursor: pointer;
+    background: var(--card);
+    transition: all .12s ease;
+  }
+  .net:hover { background: #192130; }
+  .net.sel { border-color: var(--lime); background: #16241a; box-shadow: 0 0 10px var(--lime-dim); }
+  .net .sig-bars { display: flex; align-items: flex-end; gap: 2px; width: 14px; height: 14px; flex-shrink: 0; }
+  .net .sig-bar { width: 2.5px; background: #354660; border-radius: 1px; }
+  .net .sig-bar.on { background: var(--lime); }
+  .net .nm { flex: 1; min-width: 0; }
+  .net .ss { font-weight: 600; font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .net .mb { color: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; margin-top: 2px; display: flex; gap: 8px; }
+  .net .rs { color: var(--muted); font-size: 11px; white-space: nowrap; font-variant-numeric: tabular-nums; text-align: right; }
+
+  /* Wardrive Live Table */
+  .wd-stats {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 6px;
+    margin-bottom: 10px;
+    text-align: center;
+  }
+  .wd-stat-box {
+    background: var(--card);
+    border: 1px solid var(--line);
+    border-radius: var(--radius-sm);
+    padding: 8px 4px;
+  }
+  .wd-stat-box .v { font-size: 16px; }
+  .wd-table-wrap {
+    max-height: 240px;
+    overflow-y: auto;
+    border: 1px solid var(--line);
+    border-radius: var(--radius-sm);
+    background: var(--card);
+    margin-bottom: 10px;
+    font-size: 11px;
+    font-family: ui-monospace, Menlo, monospace;
+  }
+  table.wd-table {
+    width: 100%;
+    border-collapse: collapse;
+    text-align: left;
+  }
+  table.wd-table th {
+    position: sticky;
+    top: 0;
+    background: #101622;
+    padding: 6px 8px;
+    font-size: 10px;
+    text-transform: uppercase;
+    color: var(--muted);
+    border-bottom: 1px solid var(--line);
+  }
+  table.wd-table td {
+    padding: 6px 8px;
+    border-bottom: 1px solid #1a2230;
+    white-space: nowrap;
+    color: #c9d1d9;
+  }
+  table.wd-table tr:hover td { background: #182234; }
+
+  /* Terminal Log */
+  #log {
+    font: 11px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace;
+    white-space: pre-wrap;
+    word-break: break-word;
+    color: #a5b4c4;
+    height: 180px;
+    overflow-y: auto;
+    background: #0d121a;
+    border: 1px solid var(--line);
+    border-radius: var(--radius-sm);
+    padding: 10px;
+  }
+
+  /* Banners & Alerts */
+  .banner {
+    background: var(--bad-dim);
+    border: 1px solid rgba(248,81,73,0.4);
+    color: #ffb4ad;
+    border-radius: var(--radius-sm);
+    padding: 10px 14px;
+    font-size: 12px;
+    margin-bottom: 14px;
+  }
+
+  /* Fleet Card */
+  .fleet-box {
+    background: var(--card);
+    border: 1px solid var(--line);
+    border-radius: var(--radius-sm);
+    padding: 12px;
+    margin-top: 10px;
+  }
+  .fleet-header { display: flex; align-items: center; justify-content: space-between; margin-bottom: 8px; }
+  .fleet-nodes { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--fg); }
+
+  [hidden] { display: none !important; }
 </style>
 </head>
 <body>
-  <h1>AxD&nbsp;Remote</h1>
-  <div class="sub">BLE control · one or more orange bridge chips</div>
+
+  <!-- Top Header -->
+  <header>
+    <div class="brand">
+      <div class="brand-logo">AxD</div>
+      <div>
+        <h1>AxD Remote</h1>
+        <div class="sub">AWOKxDAG BLE Control · Multi-Node Fleet &amp; Wardrive</div>
+      </div>
+    </div>
+    <button id="connect" class="primary btn-sm">+ Add ESP</button>
+  </header>
 
   <div id="nobt" class="banner" hidden>
     This browser has no Web Bluetooth. On iPhone use <b>Bluefy</b>; on Android/desktop
     use <b>Chrome/Edge</b>. The page must be served over <b>https</b>.
   </div>
 
-  <div class="card">
-    <div class="row" style="margin-bottom:10px">
-      <span id="dot" class="dot"></span>
-      <span id="state" class="status" style="flex:1">No bridges</span>
-      <button id="connect" class="primary">Add ESP</button>
+  <!-- Global Target & Device Selector -->
+  <div class="card" style="padding:10px 14px;">
+    <div class="row" style="justify-content:space-between; margin-bottom:8px;">
+      <div class="row">
+        <span id="dot" class="dot"></span>
+        <span id="state" class="status" style="font-weight:600; font-size:13px;">No bridges</span>
+      </div>
+      <div class="k" id="active-bridge-lbl">Active bridge: None</div>
     </div>
-    <div id="conns"><div class="k">No bridges connected. Tap Add ESP; add each
-      board's orange chip to control them all without reconnecting.</div></div>
-  </div>
 
-  <div class="card" id="busy-card" hidden>
-    <div id="busy" class="k" style="color:var(--accent)">Working…</div>
-  </div>
-
-  <div class="card">
-    <div class="k" style="margin-bottom:8px">Target chip — where commands run
-      (on the active bridge)</div>
     <div class="seg" id="target-seg">
-      <button data-target="1" class="on">Screen chip</button>
-      <button data-target="0">This bridge</button>
+      <button data-target="1" class="on">Screen Chip (Target)</button>
+      <button data-target="0">Bridge Chip (Target)</button>
     </div>
-    <div id="tgt-note" class="k" style="margin-top:8px" hidden>
-      Files/SD is screen-chip only on the bridge; wardrive streams its CSV to this phone (no SD needed).</div>
-  </div>
-
-  <div class="card">
-    <div class="stats">
-      <div><div class="k" id="wifiLbl">Wi-Fi</div><div id="wifi" class="v">–</div></div>
-      <div><div class="k" id="bleLbl">BLE</div><div id="ble" class="v">–</div></div>
-      <div><div class="k">Tool</div><div id="tool" class="v" style="font-size:15px">–</div></div>
-    </div>
-    <div id="gps" class="k" style="margin-top:10px">GPS: –</div>
-  </div>
-
-  <div class="card">
-    <div class="row" style="margin-bottom:8px">
-      <span class="k" style="flex:1">Networks — tap a Wi-Fi Scan result to select</span>
-      <button id="pgprev" title="previous view">◀</button>
-      <button id="pgnext" title="next view">▶</button>
-      <button data-op="1">Scan</button>
-      <button data-op="50">Refresh</button>
-    </div>
-    <div id="netlist"><div class="k">Run a Wi-Fi Scan to list networks.</div></div>
-    <div id="statuspanel" hidden></div>
-    <div class="k" style="margin:10px 0 6px; color:var(--bad)">
-      Selected-target actions — authorized targets only</div>
-    <div class="grid" id="cmds-target">
-      <button data-op="52" class="stop">Deauth</button>
-      <button data-op="53" class="stop">Grab Handshake</button>
-      <button data-op="54">Track</button>
-      <button data-op="22" class="stop">Evil Twin</button>
-      <button data-op="23" class="stop">Probe Lure</button>
+    <div id="tgt-note" class="k" style="margin-top:6px; color:var(--warn);" hidden>
+      Notice: Files/SD access is screen-chip only; wardrive streams live CSV directly to this browser.
     </div>
   </div>
 
-  <div class="card">
-    <button data-op="255" class="stop" style="width:100%">Stop / Home</button>
+  <!-- Tab Switcher -->
+  <div class="tabs">
+    <button class="tab-btn active" data-tab="tab-telemetry">📡 Telemetry</button>
+    <button class="tab-btn" data-tab="tab-networks">📶 Wi-Fi Scan</button>
+    <button class="tab-btn" data-tab="tab-wardrive">🚗 Wardrive</button>
+    <button class="tab-btn" data-tab="tab-tools">⚡ Tools &amp; Ops</button>
+    <button class="tab-btn" data-tab="tab-fleet">🤝 Fleet</button>
+    <button class="tab-btn" data-tab="tab-logs">📜 Terminal</button>
   </div>
 
-  <div class="card">
-    <div class="k" style="margin-bottom:8px">Recon</div>
-    <div class="grid" id="cmds-recon">
-      <button data-op="1">Wi-Fi Scan</button>
-      <button data-op="2">BLE Scan</button>
-      <button data-op="3">Channel Map</button>
-      <button data-op="4">Packet Monitor</button>
-      <button data-op="6">Clients</button>
-      <button data-op="10">WPS Scan</button>
-      <button data-op="11">Hidden SSID</button>
-      <button data-op="12">Cameras</button>
-      <button data-op="13">Security Audit</button>
-      <button data-op="14">BLE Trackers</button>
-      <button data-op="15">Harvester</button>
-      <button data-op="16">Probe Intel</button>
-      <button data-op="17">Saved</button>
+  <!-- TAB 1: TELEMETRY & OVERVIEW -->
+  <div id="tab-telemetry" class="tab-content">
+    <div class="card">
+      <div class="card-title">
+        <span>Active Node Telemetry</span>
+        <span id="tool-badge" class="badge badge-lime">–</span>
+      </div>
+      <div class="stats">
+        <div class="stat-box">
+          <div class="k">Wi-Fi APs</div>
+          <div id="wifi" class="v" style="color:var(--accent);">–</div>
+        </div>
+        <div class="stat-box">
+          <div class="k">BLE Devices</div>
+          <div id="ble" class="v" style="color:var(--purple);">–</div>
+        </div>
+        <div class="stat-box">
+          <div class="k">Active Tool</div>
+          <div id="tool" class="v" style="font-size:14px; margin-top:3px; color:var(--lime);">–</div>
+        </div>
+      </div>
+
+      <!-- GPS Panel -->
+      <div class="gps-panel">
+        <div>
+          <div class="row" style="gap:6px; margin-bottom:4px;">
+            <span id="gps-badge" class="badge badge-bad">NO FIX</span>
+            <span class="k" id="gps-sats">0 satellites</span>
+          </div>
+          <div id="gps" class="gps-coords">GPS: –</div>
+        </div>
+        <div id="gps-action" hidden>
+          <a id="gps-map-link" class="gps-link" href="#" target="_blank" rel="noopener">📍 Open Maps ↗</a>
+        </div>
+      </div>
+    </div>
+
+    <!-- Quick Emergency Home Button -->
+    <div style="margin-bottom:12px;">
+      <button data-op="255" class="stop" style="width:100%; font-size:14px; padding:12px;">⏹ Stop Active Tool / Return Home</button>
+    </div>
+
+    <!-- Connected Bridges Card -->
+    <div class="card">
+      <div class="card-title">Connected ESP Bridges</div>
+      <div id="conns"><div class="k">No bridges connected. Tap <b>+ Add ESP</b> above to pair your orange bridge chips.</div></div>
     </div>
   </div>
 
-  <div class="card">
-    <div class="k" style="margin-bottom:8px">GPS &amp; wardrive</div>
-    <div class="grid" id="cmds-gps">
-      <button data-op="7">Wardrive Start</button>
-      <button data-op="8">Wardrive Stop</button>
-      <button data-op="9">GPS Status</button>
-      <button data-op="40">Locator</button>
-      <button data-op="41">Status</button>
-      <button data-op="42">Files</button>
-    </div>
-    <div class="row" style="margin-top:10px; align-items:center">
-      <span class="k" id="wd-count" style="flex:1">Wardrive: 0 rows</span>
-      <button id="wd-clear">Clear</button>
-      <button id="wd-save" class="primary">Download CSV</button>
-    </div>
-    <div class="k" style="margin-top:6px">On the bridge, wardrive rows (with GPS)
-      stream here — Download saves a WiGLE CSV to your phone.</div>
-  </div>
+  <!-- TAB 2: NETWORKS (WI-FI SCAN & TARGET ACTIONS) -->
+  <div id="tab-networks" class="tab-content" hidden>
+    <div class="card">
+      <div class="card-title">
+        <span>Wi-Fi Network Scanner</span>
+        <span id="net-count-badge" class="badge badge-blue">0 Networks</span>
+      </div>
 
-  <div class="card">
-    <div class="k" style="margin-bottom:8px">Fleet — link several chips, one merged CSV</div>
-    <div class="grid" id="cmds-fleet">
-      <button data-op="60">Start Fleet</button>
-      <button data-op="61">Join Fleet</button>
-      <button data-op="62" class="stop">Leave Fleet</button>
-    </div>
-    <div class="status" id="fleet-info" style="margin-top:10px">Selected target: Fleet off</div>
-    <div class="k" id="fleet-screen-info" style="margin-top:6px">Screen chip: waiting for status</div>
-    <div class="k" id="fleet-bridge-info">This bridge: waiting for status</div>
-    <div class="k" style="margin-top:6px">Start on one chip (the coordinator), then
-      switch the target above and Join on each other chip. Every node's rows merge
-      into the wardrive CSV. Fleet status follows the selected target above.</div>
-  </div>
+      <div class="row" style="margin-bottom:10px;">
+        <button data-op="1" class="primary btn-sm">⚡ Wi-Fi Scan</button>
+        <button data-op="50" class="btn-sm">🔄 Refresh List</button>
+        <button id="net-sort-rssi" class="btn-sm">📶 Sort Signal</button>
+        <button id="net-sort-ch" class="btn-sm"># Sort Ch</button>
+      </div>
 
-  <div class="card">
-    <div class="k" style="margin-bottom:8px">Monitor</div>
-    <div class="grid" id="cmds-monitor">
-      <button data-op="5">Deauth Watch</button>
-      <button data-op="30">Rogue Watch</button>
-      <button data-op="31">BLE Spam Watch</button>
-      <button data-op="32">Karma Watch</button>
-      <button data-op="33">Beacon Watch</button>
-      <button data-op="34">Advanced Watch</button>
+      <div class="filter-bar">
+        <input type="text" id="net-search" class="search-input" placeholder="Filter by SSID, BSSID or Auth...">
+      </div>
+
+      <div class="net-list-scroll" id="netlist">
+        <div class="k" style="padding:14px; text-align:center;">Run a Wi-Fi Scan to discover nearby access points.</div>
+      </div>
+
+      <!-- Selected Target Actions -->
+      <div style="border-top: 1px solid var(--line); padding-top:12px; margin-top:10px;">
+        <div class="row" style="justify-content:space-between; margin-bottom:8px;">
+          <span class="k" style="font-weight:700; color:var(--bad);">Selected Target Actions</span>
+          <span id="sel-target-name" class="k" style="color:var(--lime); font-weight:600;">None selected</span>
+        </div>
+        <div class="grid" id="cmds-target">
+          <button data-op="52" class="stop">💥 Deauth</button>
+          <button data-op="53" class="stop">🎣 Grab Handshake</button>
+          <button data-op="54">📡 Track RSSI</button>
+          <button data-op="22" class="stop">👥 Evil Twin</button>
+          <button data-op="23" class="stop">🪤 Probe Lure</button>
+        </div>
+      </div>
     </div>
   </div>
 
-  <div class="card">
-    <div class="k" style="margin-bottom:6px; color:var(--bad)">
-      Attacks — authorized targets only</div>
-    <div class="k" style="margin-bottom:8px">
-      Evil Twin / Probe Lure act on the network last selected on the device.</div>
-    <div class="grid" id="cmds-attack">
-      <button data-op="20" class="stop">Beacon Flood</button>
-      <button data-op="21" class="stop">Evil Portal</button>
-      <button data-op="22" class="stop">Evil Twin</button>
-      <button data-op="23" class="stop">Probe Lure</button>
-      <button data-op="24" class="stop">Auth Flood</button>
+  <!-- TAB 3: WARDRIVE LIVE STREAM -->
+  <div id="tab-wardrive" class="tab-content" hidden>
+    <div class="card">
+      <div class="card-title">
+        <span>Live Wardrive Stream (WiGLE 1.6)</span>
+        <span class="badge badge-lime">GPS Active</span>
+      </div>
+
+      <div class="row" style="margin-bottom:10px;">
+        <button data-op="7" class="primary btn-sm">▶ Start Wardrive</button>
+        <button data-op="8" class="stop btn-sm">⏹ Stop Wardrive</button>
+        <button id="wd-save" class="primary btn-sm">💾 Download CSV</button>
+        <button id="wd-clear" class="btn-sm">🗑 Clear</button>
+      </div>
+
+      <!-- Live Sightings Counter Breakdown -->
+      <div class="wd-stats">
+        <div class="wd-stat-box">
+          <div class="k">Total Sighted</div>
+          <div id="wd-count" class="v" style="color:var(--lime);">0</div>
+        </div>
+        <div class="wd-stat-box">
+          <div class="k">Wi-Fi APs</div>
+          <div id="wd-wifi-count" class="v" style="color:var(--accent);">0</div>
+        </div>
+        <div class="wd-stat-box">
+          <div class="k">BLE Beacons</div>
+          <div id="wd-ble-count" class="v" style="color:var(--purple);">0</div>
+        </div>
+        <div class="wd-stat-box">
+          <div class="k">Open APs</div>
+          <div id="wd-open-count" class="v" style="color:var(--good);">0</div>
+        </div>
+      </div>
+
+      <!-- Live Stream Table -->
+      <div class="wd-table-wrap">
+        <table class="wd-table">
+          <thead>
+            <tr>
+              <th>Type</th>
+              <th>SSID</th>
+              <th>BSSID</th>
+              <th>RSSI</th>
+              <th>CH</th>
+              <th>Auth</th>
+              <th>Coordinates</th>
+            </tr>
+          </thead>
+          <tbody id="wd-tbody">
+            <tr><td colspan="7" style="text-align:center; color:var(--muted); padding:20px;">No wardrive sightings streamed yet. Start wardriving on any connected chip to capture data.</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <div class="k" style="margin-top:6px;">
+        WiGLE CSV rows streamed across all connected fleet nodes merge in real-time. Download CSV exports directly to your phone's file storage.
+      </div>
     </div>
   </div>
 
-  <div class="card">
-    <div class="k" style="margin-bottom:6px">Log</div>
-    <div id="log"></div>
+  <!-- TAB 4: TOOLS & ALL OPS -->
+  <div id="tab-tools" class="tab-content" hidden>
+    <!-- Recon -->
+    <div class="card">
+      <div class="card-title">Recon &amp; Discovery</div>
+      <div class="grid" id="cmds-recon">
+        <button data-op="1">Wi-Fi Scan</button>
+        <button data-op="2">BLE Scan</button>
+        <button data-op="3">Channel Map</button>
+        <button data-op="4">Packet Monitor</button>
+        <button data-op="6">Clients</button>
+        <button data-op="10">WPS Scan</button>
+        <button data-op="11">Hidden SSID</button>
+        <button data-op="12">Cameras</button>
+        <button data-op="13">Security Audit</button>
+        <button data-op="14">BLE Trackers</button>
+        <button data-op="15">Harvester</button>
+        <button data-op="16">Probe Intel</button>
+        <button data-op="17">Saved</button>
+      </div>
+    </div>
+
+    <!-- GPS & Storage -->
+    <div class="card">
+      <div class="card-title">GPS &amp; System</div>
+      <div class="grid" id="cmds-gps">
+        <button data-op="7">Wardrive Start</button>
+        <button data-op="8">Wardrive Stop</button>
+        <button data-op="9">GPS Status</button>
+        <button data-op="40">Locator</button>
+        <button data-op="41">Status</button>
+        <button data-op="42">Files (SD)</button>
+      </div>
+    </div>
+
+    <!-- Monitor -->
+    <div class="card">
+      <div class="card-title">Watch &amp; Detection</div>
+      <div class="grid" id="cmds-monitor">
+        <button data-op="5">Deauth Watch</button>
+        <button data-op="30">Rogue Watch</button>
+        <button data-op="31">BLE Spam Watch</button>
+        <button data-op="32">Karma Watch</button>
+        <button data-op="33">Beacon Watch</button>
+        <button data-op="34">Advanced Watch</button>
+      </div>
+    </div>
+
+    <!-- Attacks -->
+    <div class="card">
+      <div class="card-title" style="color:var(--bad);">Tactical / Attacks (Authorized Only)</div>
+      <div class="grid" id="cmds-attack">
+        <button data-op="20" class="stop">Beacon Flood</button>
+        <button data-op="21" class="stop">Evil Portal</button>
+        <button data-op="22" class="stop">Evil Twin</button>
+        <button data-op="23" class="stop">Probe Lure</button>
+        <button data-op="24" class="stop">Auth Flood</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- TAB 5: FLEET MULTI-NODE -->
+  <div id="tab-fleet" class="tab-content" hidden>
+    <div class="card">
+      <div class="card-title">Fleet Multi-Node Wardriving</div>
+      <div class="grid-3" id="cmds-fleet">
+        <button data-op="60" class="primary">👑 Start Fleet</button>
+        <button data-op="61">🔗 Join Fleet</button>
+        <button data-op="62" class="stop">Leave Fleet</button>
+      </div>
+
+      <div class="fleet-box">
+        <div class="fleet-header">
+          <span class="k">Selected Target Fleet Status:</span>
+          <span id="fleet-badge" class="badge badge-warn">OFF</span>
+        </div>
+        <div id="fleet-info" style="font-weight:700; font-size:14px; margin-bottom:6px;">Selected target: Fleet off</div>
+        <div class="k" id="fleet-screen-info" style="margin-bottom:3px;">Screen chip: waiting for status</div>
+        <div class="k" id="fleet-bridge-info">This bridge: waiting for status</div>
+      </div>
+
+      <div class="k" style="margin-top:10px;">
+        💡 <b>Multi-node setup:</b> Start Fleet on one device (Coordinator). Then switch to other nodes or chips and tap Join Fleet. Sightings from all nodes merge automatically into your wardrive session.
+      </div>
+    </div>
+  </div>
+
+  <!-- TAB 6: TERMINAL LOG -->
+  <div id="tab-logs" class="tab-content" hidden>
+    <div class="card">
+      <div class="card-title">
+        <span>Console Log</span>
+        <button id="clear-log" class="btn-sm">Clear Log</button>
+      </div>
+      <div id="log"></div>
+    </div>
   </div>
 
 <script>
@@ -222,24 +676,35 @@
 const SVC     = "a0d10000-1234-4a3c-8b21-000000000001";
 const CMD     = "a0d10000-1234-4a3c-8b21-000000000002"; // write
 const STATUS  = "a0d10000-1234-4a3c-8b21-000000000003"; // notify/read
-const RESULTS = "a0d10000-1234-4a3c-8b21-000000000004"; // notify (Wi-Fi list)
+const RESULTS = "a0d10000-1234-4a3c-8b21-000000000004"; // notify (Wi-Fi list / WiGLE row)
 const OP_SELECT_WIFI = 51;
 const TARGET_OPS = [52,53,54,22,23];  // need a selected network
 const TGT_BRIDGE = 0, TGT_SCREEN = 1;
-const VIEW_NAMES = ["Home","Wi-Fi","Channels","BLE","BLE Detail","Saved","Wi-Fi Audit","Signal","Deauth Watch","Deauth Select","Deauth Attack","Handshake","Clients","Recon","Monitor","Attacks","Beacon Flood","Evil Portal","GPS","Wardrive","Packet Mon","Locator","WPS","Status","Settings","Screen Test","Files","BLE Spam Watch","Probe Lure","Rogue Watch","Hidden SSID","Cameras","Security Audit","Trackers","Harvester","Probe Intel","Karma Watch","Beacon Watch","Auth Flood","Advanced Watch","Link Wardrive","Network","Network Setup","Network Edit","Network APs","Network Results","Network Host","Network Detail"];
-function viewName(id){ return (id!=null && id<VIEW_NAMES.length) ? VIEW_NAMES[id] : (id!=null?("#"+id):"–"); }
-const TOOL_COUNTERS = {8:["Deauth","Disassoc"],10:["Frames","Targets"],11:["EAPOL","PMKID"],12:["Clients",null],16:["Beacons",null],17:["Creds",null],19:["Nets","BLE"],22:["WPS",null],27:["Spam","Total"],28:["Probes",null],30:["Hidden",null],31:["Cameras",null],32:["Findings",null],33:["Trackers",null],34:["Seen","PMKID"],35:["SSIDs",null],36:["KarmaAP",null],37:["Beacons",null],38:["AuthFr",null],39:["Anom",null],40:["Nets","BLE"]};
-function toolLabels(t){ return TOOL_COUNTERS[t] || ["Wi-Fi","BLE"]; }
-let busyPending=false, busyToolAtTap=null, busySince=0;
-function setBusy(label){ const c=activeConn(); const s=c?c.statuses[target]:null; busyToolAtTap = s?s.tool:null; busyPending=true; busySince=Date.now(); const el=document.getElementById("busy"); if(el) el.textContent="Working… "+label; const card=document.getElementById("busy-card"); if(card) card.hidden=false; }
-function clearBusy(){ busyPending=false; const card=document.getElementById("busy-card"); if(card) card.hidden=true; }
-function maybeClearBusy(){ if(!busyPending) return; if(Date.now()-busySince>12000){ clearBusy(); return; } const c=activeConn(); const s=c?c.statuses[target]:null; if(s && s.tool!=null && s.tool!==busyToolAtTap) clearBusy(); }
-setInterval(maybeClearBusy, 500);
 let target = TGT_SCREEN;  // which chip runs the command
 const GPSSD_OPS = [42];  // Files -- screen-chip only (no SD on bridge)
 
+// Friendly tool opcode dictionary for telemetry display
+const TOOL_NAMES = {
+  0: "Idle", 1: "Wi-Fi Scan", 2: "BLE Scan", 3: "Channel Map",
+  4: "Packet Monitor", 5: "Deauth Watch", 6: "Clients", 7: "Wardrive",
+  8: "Wardrive Stop", 9: "GPS Status", 10: "WPS Scan", 11: "Hidden SSID",
+  12: "Camera Scan", 13: "Security Audit", 14: "BLE Trackers", 15: "Harvester",
+  16: "Probe Intel", 17: "Saved APs", 20: "Beacon Flood", 21: "Evil Portal",
+  22: "Evil Twin", 23: "Probe Lure", 24: "Auth Flood", 30: "Rogue Watch",
+  31: "BLE Spam Watch", 32: "Karma Watch", 33: "Beacon Watch", 34: "Advanced Watch",
+  40: "Locator", 41: "Status", 42: "Files", 50: "List Wi-Fi",
+  51: "Select Wi-Fi", 52: "Deauth", 53: "Grab Handshake", 54: "Track RSSI",
+  60: "Fleet Start", 61: "Fleet Join", 62: "Fleet Leave", 255: "Home / Idle"
+};
+
 const $ = (id) => document.getElementById(id);
-const log = (m) => { const d=$("log"); d.textContent += (new Date().toLocaleTimeString()+"  "+m+"\n"); d.scrollTop=d.scrollHeight; };
+const log = (m) => {
+  const d = $("log");
+  if (d) {
+    d.textContent += (new Date().toLocaleTimeString() + "  " + m + "\n");
+    d.scrollTop = d.scrollHeight;
+  }
+};
 
 // Several bridges can be connected at once; commands go to the ACTIVE one, but
 // every bridge's wardrive rows merge into one CSV. Each entry:
@@ -249,40 +714,17 @@ let conns = [];
 let activeId = null;
 let connCounter = 0;
 let wardriveRows = [];  // merged across ALL bridges
+let parsedSightings = []; // array of {type, ssid, bssid, rssi, ch, auth, lat, lon}
+let sortMode = "rssi"; // "rssi" | "ch" | "ssid"
 
 const activeConn = () => conns.find(c => c.id === activeId) || null;
-const IDLE_TOOLS = new Set([0,23,24,26]);
-function toolActive(){ const c=activeConn(); const s=c?c.statuses[target]:null; return !!(s && s.tool!=null && !IDLE_TOOLS.has(s.tool)); }
-let resultsPage = 0;
-function setPage(p){ resultsPage=(p+2)%2; const nl=document.getElementById("netlist"), sp=document.getElementById("statuspanel"); if(nl) nl.hidden = resultsPage!==0; if(sp) sp.hidden = resultsPage!==1; if(resultsPage===1) renderStatusPanel(); }
-function renderStatusPanel(){
-  const box=document.getElementById("statuspanel"); if(!box) return;
-  const c=activeConn(); const s=c?c.statuses[target]:null;
-  if(!s){ box.innerHTML='<div class="k">No status yet \u2014 waiting for the chip.</div>'; return; }
-  const age = s.ms ? Math.round((Date.now()-s.ms)/1000) : null;
-  const stale = age!=null && age>4;
-  const state = busyPending ? "Working\u2026" : (toolActive() ? "running" : "idle");
-  box.innerHTML =
-    '<div class="net"><div><b>'+viewName(s.tool)+'</b><div class="k">'+state+'</div></div>'+
-    '<div class="k" style="color:'+(stale?"var(--bad)":"inherit")+'">'+(age!=null?age+"s ago":"\u2013")+'</div></div>'+
-    (function(){ const L=toolLabels(s.tool); let r='<div class="k" style="margin-top:8px">'+L[0]+': '+(s.wifi!=null?s.wifi:"\u2013"); if(L[1]!=null) r+='   \u00b7   '+L[1]+': '+(s.ble!=null?s.ble:"\u2013"); if(s.battery!=null) r+='   \u00b7   Batt: '+s.battery+'%'; return r+'</div>'; })()+
-    '<div class="k">'+(s.gpsFix?"GPS: FIX \u00b7 "+s.sats+" sats":(s.sats!=null?"GPS: no fix \u00b7 "+s.sats+" sats":"GPS: \u2013"))+'</div>'+
-    (s.fleetShort?'<div class="k">Fleet: '+s.fleetShort+'</div>':"")+
-    (stale?'<div class="k" style="color:var(--bad);margin-top:6px">No update in '+age+'s \u2014 link may have dropped</div>':"");
-}
-setInterval(()=>{ if(resultsPage===1) renderStatusPanel(); }, 1000);
-document.addEventListener("DOMContentLoaded",()=>{
-  const pv=document.getElementById("pgprev"), nx=document.getElementById("pgnext");
-  if(pv) pv.addEventListener("click",()=>setPage(resultsPage-1));
-  if(nx) nx.addEventListener("click",()=>setPage(resultsPage+1));
-});
 
 function anyConnected(){ return conns.some(c => c.connected); }
 
 function setActive(id){
   activeId = id;
   const c = activeConn();
-  // Show the active bridge's own Wi-Fi list + status.
+  $("active-bridge-lbl").textContent = "Active bridge: " + (c ? c.name : "None");
   renderNets(); renderStats(); refreshTargetButtons(); applyTargetGating();
   renderConns();
   if (c) log("active bridge = " + c.name);
@@ -294,6 +736,8 @@ function updateEnabled(){
   $("dot").classList.toggle("on", on);
   const n = conns.filter(c => c.connected).length;
   $("state").textContent = n ? (n + " bridge" + (n===1?"":"s") + " connected") : "No bridges";
+  const c = activeConn();
+  $("active-bridge-lbl").textContent = "Active bridge: " + (c ? c.name : "None");
   if (on){ refreshTargetButtons(); applyTargetGating(); }
 }
 
@@ -304,6 +748,8 @@ function refreshTargetButtons(){
     const b = document.querySelector('#cmds-target button[data-op="'+op+'"]');
     if (b) b.disabled = !(c && c.connected) || !ready;
   });
+  const selNet = (c && c.selIndex !== null && c.nets.has(c.selIndex)) ? c.nets.get(c.selIndex) : null;
+  $("sel-target-name").textContent = selNet ? (selNet.ssid || "<hidden>") + " (" + selNet.bssid + ")" : "None selected";
 }
 
 // ---- connection list ----------------------------------------------------
@@ -314,15 +760,14 @@ function connSummary(c){
   if (s.fleetShort) parts.push(s.fleetShort);
   parts.push("wifi " + (s.wifi ?? "–"));
   parts.push("ble " + (s.ble ?? "–"));
-  if (s.gpsFix) parts.push("GPS");
+  if (s.gpsFix) parts.push("GPS FIX");
   return parts.join(" · ");
 }
 
 function renderConns(){
   const box = $("conns");
   if (!conns.length){
-    box.innerHTML = '<div class="k">No bridges connected. Tap Add ESP; add each ' +
-      "board's orange chip to control them all without reconnecting.</div>";
+    box.innerHTML = '<div class="k">No bridges connected. Tap <b>+ Add ESP</b> above to pair your orange bridge chips.</div>';
     return;
   }
   box.innerHTML = "";
@@ -333,7 +778,7 @@ function renderConns(){
     dot.className = "dot" + (c.connected ? " on" : "");
     const nm = document.createElement("div");
     nm.className = "nm";
-    nm.innerHTML = '<div class="ss">'+c.name+(c.id===activeId?' · active':'')+
+    nm.innerHTML = '<div class="ss">'+c.name+(c.id===activeId?' <span class="badge badge-blue">ACTIVE</span>':'')+
       '</div><div class="mb"></div>';
     const x = document.createElement("button");
     x.className = "x"; x.textContent = c.connected ? "×" : "retry";
@@ -352,24 +797,16 @@ function touchConnRow(c){  // in-place refresh (no full re-render, avoids flicke
   if (c.dotEl) c.dotEl.classList.toggle("on", c.connected);
 }
 
-// ---- per-bridge Wi-Fi list ----------------------------------------------
-const AUTH = ["open","WEP","WPA","WPA2","WPA2E","WPA3","WPA2/3","WAPI","OWE"];
+// ---- per-bridge Wi-Fi list & Wardrive parsing ---------------------------
+const AUTH = ["Open","WEP","WPA","WPA2","WPA2-Ent","WPA3","WPA2/3","WAPI","OWE"];
+
 function parseResult(dv, c){
-  if (dv.byteLength >= 4 && dv.getUint8(0) === 3) {  // BLE scan result
-    const i = dv.getUint8(1), count = dv.getUint8(2), rssi = dv.getInt8(3);
-    let t=""; for (let k=4;k<dv.byteLength;k++) t += String.fromCharCode(dv.getUint8(k));
-    const parts = t.split("\t"); const name = parts[0]||"", addr = parts[1]||"";
-    if (!c.bleNets) c.bleNets = new Map();
-    c.bleNets.set(i, {i, count, rssi, name, addr});
-    for (const k of [...c.bleNets.keys()]) if (k >= count) c.bleNets.delete(k);
-    if (c.id === activeId) renderBle();
-    return;
-  }
   if (dv.byteLength >= 1 && dv.getUint8(0) === 2) {  // wardrive WiGLE CSV row (text)
     let row = "";
     for (let k = 1; k < dv.byteLength; k++) row += String.fromCharCode(dv.getUint8(k));
     wardriveRows.push(row);  // merged across every bridge
-    $("wd-count").textContent = "Wardrive: " + wardriveRows.length + " rows";
+    $("wd-count").textContent = wardriveRows.length;
+    parseWardriveRow(row);
     return;
   }
   if (dv.byteLength < 12) return;            // [source][index][count][rssi][ch][auth][bssid6][ssid]
@@ -378,31 +815,115 @@ function parseResult(dv, c){
   let mac=[]; for (let k=0;k<6;k++) mac.push(dv.getUint8(6+k).toString(16).padStart(2,"0"));
   let ssid=""; for (let k=12;k<dv.byteLength;k++) ssid += String.fromCharCode(dv.getUint8(k));
   c.nets.set(i, {i, count, rssi, ch, auth, bssid:mac.join(":"), ssid});
-  for (const k of [...c.nets.keys()]) if (k >= count) c.nets.delete(k);
   if (c.id === activeId) renderNets();
 }
 
-function renderBle(){
-  const box = $("netlist"); const c = activeConn();
-  const list = c && c.bleNets ? [...c.bleNets.values()].sort((a,b)=>b.rssi-a.rssi) : [];
-  if (!list.length){ box.innerHTML = '<div class="k">No BLE devices yet.</div>'; return; }
-  box.innerHTML = list.map(n =>
-    '<div class="net"><div><b>'+(n.name||"<unnamed>")+'</b><div class="k">'+n.addr+'</div></div>'+
-    '<div class="k">'+n.rssi+' dBm</div></div>').join("");
+// Parse live WiGLE 1.6 CSV string into table & counters
+function parseWardriveRow(rowStr){
+  try {
+    const p = rowStr.split(",");
+    if (p.length < 14) return;
+    const item = {
+      bssid: p[0] || "",
+      ssid: p[1] || "<hidden>",
+      auth: p[2] || "",
+      time: p[3] || "",
+      ch: p[4] || "",
+      rssi: p[6] || "",
+      lat: parseFloat(p[7]) || 0,
+      lon: parseFloat(p[8]) || 0,
+      type: (p[13] || "").trim() || "WIFI"
+    };
+    parsedSightings.unshift(item);
+    if (parsedSightings.length > 80) parsedSightings.pop();
+    renderWardriveTable();
+  } catch(e){}
 }
+
+function renderWardriveTable(){
+  const tbody = $("wd-tbody");
+  if (!tbody) return;
+  let wifiC = 0, bleC = 0, openC = 0;
+  for (const r of wardriveRows){
+    const parts = r.split(",");
+    const t = (parts[13] || "").trim().toUpperCase();
+    if (t === "BLE") bleC++;
+    else wifiC++;
+    if ((parts[2] || "").includes("[ESS]") && !(parts[2] || "").includes("WPA")) openC++;
+  }
+  $("wd-wifi-count").textContent = wifiC;
+  $("wd-ble-count").textContent = bleC;
+  $("wd-open-count").textContent = openC;
+
+  if (parsedSightings.length === 0){
+    tbody.innerHTML = '<tr><td colspan="7" style="text-align:center; color:var(--muted); padding:20px;">No wardrive sightings streamed yet. Start wardriving on any connected chip to capture data.</td></tr>';
+    return;
+  }
+  tbody.innerHTML = parsedSightings.map(s => {
+    const isBle = s.type === "BLE";
+    const typeBadge = isBle ? '<span class="badge badge-purple">BLE</span>' : '<span class="badge badge-blue">WIFI</span>';
+    const coords = (s.lat !== 0 || s.lon !== 0) ? `${s.lat.toFixed(4)}, ${s.lon.toFixed(4)}` : '–';
+    return `<tr>
+      <td>${typeBadge}</td>
+      <td style="font-weight:600; color:#fff; max-width:140px; overflow:hidden; text-overflow:ellipsis;">${s.ssid}</td>
+      <td style="color:var(--muted);">${s.bssid}</td>
+      <td style="color:var(--lime);">${s.rssi} dBm</td>
+      <td>${s.ch}</td>
+      <td><span class="badge ${s.auth.includes('WPA3')?'badge-purple':(s.auth.includes('WPA')?'badge-blue':'badge-good')}">${s.auth}</span></td>
+      <td>${coords}</td>
+    </tr>`;
+  }).join("");
+}
+
+function getSignalBars(rssi){
+  let bars = 1;
+  if (rssi >= -55) bars = 4;
+  else if (rssi >= -70) bars = 3;
+  else if (rssi >= -82) bars = 2;
+  return `
+    <div class="sig-bars" title="${rssi} dBm">
+      <div class="sig-bar on" style="height:25%"></div>
+      <div class="sig-bar ${bars>=2?'on':''}" style="height:50%"></div>
+      <div class="sig-bar ${bars>=3?'on':''}" style="height:75%"></div>
+      <div class="sig-bar ${bars>=4?'on':''}" style="height:100%"></div>
+    </div>`;
+}
+
 function renderNets(){
   const box = $("netlist");
   const c = activeConn();
   const nets = c ? c.nets : new Map();
-  if (nets.size === 0){ box.innerHTML = '<div class="k">Run a Wi-Fi Scan to list networks.</div>'; return; }
-  const rows = [...nets.values()].sort((a,b)=>a.i-b.i);
+  $("net-count-badge").textContent = nets.size + " Networks";
+  if (nets.size === 0){
+    box.innerHTML = '<div class="k" style="padding:14px; text-align:center;">Run a Wi-Fi Scan to discover nearby access points.</div>';
+    return;
+  }
+  const filter = ($("net-search") ? $("net-search").value.trim().toLowerCase() : "");
+  let rows = [...nets.values()];
+
+  if (filter){
+    rows = rows.filter(n =>
+      (n.ssid && n.ssid.toLowerCase().includes(filter)) ||
+      (n.bssid && n.bssid.toLowerCase().includes(filter)) ||
+      (AUTH[n.auth] && AUTH[n.auth].toLowerCase().includes(filter))
+    );
+  }
+
+  if (sortMode === "rssi") rows.sort((a,b) => b.rssi - a.rssi);
+  else if (sortMode === "ch") rows.sort((a,b) => a.ch - b.ch);
+  else if (sortMode === "ssid") rows.sort((a,b) => (a.ssid||"").localeCompare(b.ssid||""));
+
   box.innerHTML = "";
   for (const n of rows){
     const el = document.createElement("div");
     el.className = "net" + (n.i===c.selIndex ? " sel" : "");
-    el.innerHTML = '<div class="nm"><div class="ss">'+(n.ssid||"&lt;hidden&gt;")+
-      '</div><div class="mb">'+n.bssid+'  ch'+n.ch+'  '+(AUTH[n.auth]||n.auth)+'</div></div>'+
-      '<div class="rs">'+n.rssi+' dBm</div>';
+    const authName = AUTH[n.auth] || n.auth;
+    const authClass = authName==="Open" ? "badge-good" : (authName.includes("WPA3") ? "badge-purple" : "badge-blue");
+
+    el.innerHTML = getSignalBars(n.rssi) +
+      '<div class="nm"><div class="ss">' + (n.ssid || "&lt;hidden&gt;") + '</div>' +
+      '<div class="mb"><span>' + n.bssid + '</span><span class="badge ' + authClass + '">' + authName + '</span><span class="badge badge-lime">CH ' + n.ch + '</span></div></div>' +
+      '<div class="rs">' + n.rssi + ' dBm</div>';
     el.addEventListener("click", () => selectNet(n.i));
     box.appendChild(el);
   }
@@ -424,9 +945,7 @@ function parseStatus(dv, c){
     if (dv.byteLength < 1) return;
     const source = dv.getUint8(0);
     if (source !== TGT_BRIDGE && source !== TGT_SCREEN) return;
-    if (dv.byteLength === 4 && dv.getUint8(1) === 0xC0){ log("cmd #"+dv.getUint8(2)+" op "+dv.getUint8(3)+" sent"); return; }
     const s = c.statuses[source] || (c.statuses[source] = {});
-    s.ms = Date.now();
     s.seen = true;
     if (dv.byteLength >= 10){
       s.wifi = dv.getUint32(1, true);
@@ -449,7 +968,6 @@ function parseStatus(dv, c){
           String(s.code).padStart(4,"0") + "/" + s.members)
         : "";
     }
-    if (dv.byteLength >= 26){ s.battery = dv.getUint8(25); }
   } catch(e){ /* leave prior values */ }
   touchConnRow(c);
   if (c.id === activeId) renderStats();
@@ -467,29 +985,71 @@ function fleetDescription(s){
 
 function renderStats(){
   const c = activeConn();
-  if (!c){ $("wifi").textContent = "–"; $("ble").textContent = "–";
-    $("tool").textContent = "–"; $("gps").textContent = "GPS: –";
+  if (!c){
+    $("wifi").textContent = "–"; $("ble").textContent = "–";
+    $("tool").textContent = "–"; $("tool-badge").textContent = "–";
+    $("gps").textContent = "GPS: –"; $("gps-badge").textContent = "NO FIX"; $("gps-badge").className = "badge badge-bad";
+    $("gps-sats").textContent = "0 satellites";
+    $("gps-action").hidden = true;
     $("fleet-info").textContent = "Selected target: Fleet off";
+    $("fleet-badge").textContent = "OFF"; $("fleet-badge").className = "badge badge-warn";
     $("fleet-screen-info").textContent = "Screen chip: waiting for status";
     $("fleet-bridge-info").textContent = "This bridge: waiting for status";
-    return; }
+    return;
+  }
   const s = c.statuses[target] || {};
-  { const L=toolLabels(s.tool);
-    const wl=document.getElementById("wifiLbl"), bl=document.getElementById("bleLbl");
-    if(wl) wl.textContent=L[0]; if(bl) bl.textContent=L[1]||"–";
-    $("wifi").textContent = s.wifi ?? "–";
-    $("ble").textContent  = (L[1]==null) ? "–" : (s.ble ?? "–"); }
-  $("tool").textContent = s.tool!=null ? viewName(s.tool) : "–";
-  $("gps").textContent = s.gpsFix
-    ? "GPS: FIX · " + s.sats + " sats · " + s.lat.toFixed(5) + ", " + s.lon.toFixed(5)
-    : (s.sats!=null ? "GPS: no fix · " + s.sats + " sats" : "GPS: –");
-  $("gps").textContent += (s.battery!=null ? "   ·   Batt: " + s.battery + "%" : "");
+  $("wifi").textContent = s.wifi != null ? s.wifi.toLocaleString() : "–";
+  $("ble").textContent  = s.ble != null ? s.ble.toLocaleString() : "–";
+
+  // Decode tool opcode into human readable name
+  if (s.tool != null) {
+    const toolName = TOOL_NAMES[s.tool] || ("Opcode #" + s.tool);
+    $("tool").textContent = toolName;
+    $("tool-badge").textContent = "#" + s.tool + " " + toolName;
+  } else {
+    $("tool").textContent = "–";
+    $("tool-badge").textContent = "–";
+  }
+
+  // Enhanced GPS Display with Maps Link
+  if (s.gpsFix && s.lat && s.lon) {
+    $("gps-badge").textContent = "3D FIX";
+    $("gps-badge").className = "badge badge-good";
+    $("gps-sats").textContent = (s.sats ?? 0) + " satellites";
+    $("gps").textContent = s.lat.toFixed(5) + ", " + s.lon.toFixed(5);
+    $("gps-action").hidden = false;
+    $("gps-map-link").href = `https://www.google.com/maps?q=${s.lat.toFixed(5)},${s.lon.toFixed(5)}`;
+  } else {
+    $("gps-badge").textContent = s.sats ? "SEARCHING" : "NO FIX";
+    $("gps-badge").className = s.sats ? "badge badge-warn" : "badge badge-bad";
+    $("gps-sats").textContent = (s.sats ?? 0) + " satellites";
+    $("gps").textContent = s.sats != null ? "Searching for fix..." : "GPS: –";
+    $("gps-action").hidden = true;
+  }
+
+  // Fleet Status & Badges
   $("fleet-info").textContent =
     (target===TGT_SCREEN ? "Selected screen: " : "Selected bridge: ") + fleetDescription(s);
   $("fleet-screen-info").textContent =
     "Screen chip: " + fleetDescription(c.statuses[TGT_SCREEN]);
   $("fleet-bridge-info").textContent =
     "This bridge: " + fleetDescription(c.statuses[TGT_BRIDGE]);
+
+  if (s.fleetActive) {
+    if (s.listening) {
+      $("fleet-badge").textContent = "JOINING";
+      $("fleet-badge").className = "badge badge-blue";
+    } else if (s.coord) {
+      $("fleet-badge").textContent = "COORDINATOR";
+      $("fleet-badge").className = "badge badge-lime";
+    } else {
+      $("fleet-badge").textContent = "MEMBER";
+      $("fleet-badge").className = "badge badge-good";
+    }
+  } else {
+    $("fleet-badge").textContent = "OFF";
+    $("fleet-badge").className = "badge badge-warn";
+  }
 }
 
 // ---- connect / add another ----------------------------------------------
@@ -562,9 +1122,11 @@ function disconnectConn(c){
 async function sendOp(op, arg=0){
   const c = activeConn();
   if (!c || !c.cmdCh || !c.connected){ log("no active bridge"); return; }
-  try { await c.cmdCh.writeValue(new Uint8Array([op, arg, target]));
-        log("["+c.name+"] op "+op+(arg?(" arg "+arg):"")+" -> "+(target===TGT_BRIDGE?"bridge":"screen")); }
-  catch(e){ log("send failed: "+e.message); }
+  try {
+    await c.cmdCh.writeValue(new Uint8Array([op, arg, target]));
+    const opLabel = TOOL_NAMES[op] || ("Op " + op);
+    log("["+c.name+"] " + opLabel + (arg?(" arg "+arg):"") + " -> " + (target===TGT_BRIDGE?"bridge":"screen"));
+  } catch(e){ log("send failed: "+e.message); }
 }
 
 function applyTargetGating(){
@@ -578,25 +1140,42 @@ function applyTargetGating(){
     });
   });
 }
+
 document.querySelectorAll('#target-seg button').forEach(b =>
   b.addEventListener("click", () => {
     target = Number(b.dataset.target);
     document.querySelectorAll('#target-seg button').forEach(x =>
       x.classList.toggle("on", x === b));
     const c = activeConn();
-    if (c){ c.nets.clear(); if (c.bleNets) c.bleNets.clear(); c.selIndex = null; }  // lists are per-chip
+    if (c){ c.nets.clear(); c.selIndex = null; }  // lists are per-chip
     renderNets();
     applyTargetGating();
     log("target = " + (target===TGT_BRIDGE ? "this bridge" : "screen chip"));
   }));
+
+// Tab navigation handler
+document.querySelectorAll(".tab-btn").forEach(btn => {
+  btn.addEventListener("click", () => {
+    document.querySelectorAll(".tab-btn").forEach(b => b.classList.remove("active"));
+    document.querySelectorAll(".tab-content").forEach(c => c.hidden = true);
+    btn.classList.add("active");
+    const targetTab = $(btn.dataset.tab);
+    if (targetTab) targetTab.hidden = false;
+  });
+});
+
+// Network search & sort events
+$("net-search").addEventListener("input", renderNets);
+$("net-sort-rssi").addEventListener("click", () => { sortMode = "rssi"; renderNets(); });
+$("net-sort-ch").addEventListener("click", () => { sortMode = "ch"; renderNets(); });
 
 updateEnabled(); renderConns(); renderStats();
 
 async function downloadWardriveCsv(){
   if (!wardriveRows.length){ log("no wardrive rows yet"); return; }
   const header =
-    "WigleWifi_1.4,appRelease=AxD,model=ESP32-C5,release=1.5.0,device=AxD,display=none,board=Dual C5 Bridge,brand=AxD\n" +
-    "MAC,SSID,AuthMode,FirstSeen,Channel,RSSI,CurrentLatitude,CurrentLongitude,AltitudeMeters,AccuracyMeters,Type\n";
+    "WigleWifi-1.6,appRelease=AxD,model=ESP32,release=1.5.4,device=AxD,display=none,board=AxD Bridge,brand=AxD\n" +
+    "MAC,SSID,AuthMode,FirstSeen,Channel,Frequency,RSSI,CurrentLatitude,CurrentLongitude,AltitudeMeters,AccuracyMeters,RCOIs,MfgrId,Type\n";
   const text = header + wardriveRows.join("\n") + "\n";
   const fname = "wardrive-" + Date.now() + ".csv";
   // iOS/Bluefy ignore <a download>; the Web Share API with a File opens the
@@ -619,23 +1198,22 @@ async function downloadWardriveCsv(){
   setTimeout(() => URL.revokeObjectURL(url), 4000);
   log("downloaded " + wardriveRows.length + " rows");
 }
+
 $("wd-save").addEventListener("click", downloadWardriveCsv);
 $("wd-clear").addEventListener("click", () => {
-  wardriveRows = []; $("wd-count").textContent = "Wardrive: 0 rows"; log("wardrive rows cleared");
+  wardriveRows = [];
+  parsedSightings = [];
+  $("wd-count").textContent = "0";
+  renderWardriveTable();
+  log("wardrive rows cleared");
 });
+$("clear-log").addEventListener("click", () => {
+  $("log").textContent = "";
+});
+
 $("connect").addEventListener("click", addEsp);
-const CLEAR_ON_OP = new Set([1,2,3,4,5,6,10,11,12,13,14,15,16,17,30,31,32,33,34,40]);
 document.querySelectorAll("button[data-op]").forEach(b =>
-  b.addEventListener("click", () => {
-    const op = Number(b.dataset.op);
-    if (op !== 255 && op !== 50 && (busyPending || toolActive())){ log("running \u2014 Stop/Home first"); return; }
-    if (op === 50){ const c = activeConn(); if (c){ c.nets.clear(); if (c.bleNets) c.bleNets.clear(); c.selIndex = null; } renderNets(); log("list cleared"); return; }
-    if (CLEAR_ON_OP.has(op)){ const c = activeConn(); if (c){ c.nets.clear(); if (c.bleNets) c.bleNets.clear(); c.selIndex = null; } renderNets(); }
-    const label = (b.textContent || ("op " + op)).trim();
-    log("\u2192 " + label);
-    setBusy(label);
-    sendOp(op);
-  }));
+  b.addEventListener("click", () => sendOp(Number(b.dataset.op))));
 </script>
 </body>
 </html>
