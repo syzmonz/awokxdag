@@ -13,8 +13,9 @@ const uint16_t kBatteryCapacityOptions[] = {500, 1000, 1500, 2000, 2500,
 constexpr int kBatteryCapacityOptionCount = static_cast<int>(
     sizeof(kBatteryCapacityOptions) / sizeof(kBatteryCapacityOptions[0]));
 constexpr uint16_t kBatteryCapacityDefaultMah = 2000;
-const uint8_t kBatteryTuneOptions[] = {50, 60, 70, 80, 90, 100,
-                                       110, 120, 130, 140, 150};
+const uint8_t kBatteryTuneOptions[] = {50, 55, 60, 65, 70, 75, 80, 85, 90, 95,
+                                       100, 105, 110, 115, 120, 125, 130, 135,
+                                       140, 145, 150};
 constexpr int kBatteryTuneOptionCount = static_cast<int>(
     sizeof(kBatteryTuneOptions) / sizeof(kBatteryTuneOptions[0]));
 constexpr uint8_t kBatteryTuneDefault = 100;
