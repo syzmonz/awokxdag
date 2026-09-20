@@ -113,7 +113,7 @@ constexpr uint8_t kDeauthHopChannels[] = {
 constexpr int kDeauthHopChannelCount =
     static_cast<int>(sizeof(kDeauthHopChannels) / sizeof(kDeauthHopChannels[0]));
 constexpr int kMaxDeauthTargets = 8;
-constexpr char kVersion[] = "1.6.0-syz.1";
+constexpr char kVersion[] = "1.6.1-syz.1";
 constexpr char kAuthor[] = "dag nazty";
 constexpr uint32_t kHandshakeRedrawMs = 500;
 constexpr uint32_t kHandshakePulseMs = 2000;
@@ -170,6 +170,9 @@ constexpr int kProbeMacsPerSsid = 8;
 constexpr int kProbeHitQueueSlots = AwokPins::kDualBand ? 32 : 16;
 constexpr uint32_t kProbeHopIntervalMs = 300;
 constexpr uint32_t kProbeRedrawMs = 700;
+
+// Topology Map: Swarm client/AP association & probe graph
+constexpr char kTopologyCsvPath[] = "/awokxdag/topology_map.csv";
 
 // Karma Watch: one BSSID answering many SSIDs (WiFi Pineapple / Karma / MANA).
 constexpr char kKarmaLogCsvPath[] = "/awokxdag/karma_log.csv";
@@ -353,7 +356,8 @@ enum class View {
   kNetworkDetail,
   kWardriveUpload,
   kWardriveUploadFiles,
-  kFleetHunt
+  kFleetHunt,
+  kTopologyMap
 };
 
 // ---- Link Mode (ESP-NOW pairing of two AxD units) -----------------------
@@ -705,6 +709,17 @@ struct BssidHit {
   uint8_t bssid[6];
   uint8_t channel;
   int8_t rssi;
+};
+
+// Minimal POD link observation for Swarm Topology Map.
+struct TopoHit {
+  uint8_t type;  // 0 = Station->AP Data, 1 = Probe Request, 2 = Beacon/ProbeResp
+  uint8_t clientMac[6];
+  uint8_t bssid[6];
+  int8_t rssi;
+  uint8_t channel;
+  bool isOpen;
+  char ssid[33];
 };
 
 struct BleEntry {

@@ -69,6 +69,33 @@ void onLinkRecv(const esp_now_recv_info_t* info, const uint8_t* data, int len) {
     huntOnObservationFrame(data);
     return;
   }
+  if (type == kLinkMsgFleetTopology &&
+      len == static_cast<int>(sizeof(FleetTopologyLink))) {
+    topologyOnLinkFrame(data);
+#ifdef AWOK_HEADLESS
+    FleetTopologyLink r;
+    memcpy(&r, data, sizeof(r));
+    char clientStr[20];
+    snprintf(clientStr, sizeof(clientStr), "%02X:%02X:%02X:%02X:%02X:%02X",
+             r.clientMac[0], r.clientMac[1], r.clientMac[2], r.clientMac[3], r.clientMac[4], r.clientMac[5]);
+    char rowBuf[128];
+    int rlen = 0;
+    if (r.linkType == 0) {
+      char targetStr[20];
+      snprintf(targetStr, sizeof(targetStr), "%02X:%02X:%02X:%02X:%02X:%02X",
+               r.targetMac[0], r.targetMac[1], r.targetMac[2], r.targetMac[3], r.targetMac[4], r.targetMac[5]);
+      rlen = snprintf(rowBuf, sizeof(rowBuf), "$TOPO,CLI,%s,%s,%d,1",
+                      clientStr, targetStr, r.rssi);
+    } else {
+      rlen = snprintf(rowBuf, sizeof(rowBuf), "$TOPO,PRB,%s,%s,%d,1",
+                      clientStr, r.targetName, r.rssi);
+    }
+    if (rlen > 0) {
+      bridgeNotifyResult(kSourceTopo, reinterpret_cast<const uint8_t*>(rowBuf), rlen);
+    }
+#endif
+    return;
+  }
 
 #ifdef AWOK_HEADLESS
   // Bridge phone-relay role: forward a screen chip's telem/results to the phone.
@@ -1077,6 +1104,7 @@ void linkDispatchCommand(uint8_t op, uint8_t arg) {
     case kAxdCmdFleetHunt:
       if (selectedWifi.bssid.length()) startFleetHunt();
       break;
+    case kAxdCmdTopology: startTopologyMap(); break;
     // Fleet control (phone or on-device buttons)
     case kAxdCmdFleetStart: fleetStartWardrive(); break;
     case kAxdCmdFleetJoin: fleetArm(); break;

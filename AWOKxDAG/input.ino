@@ -334,6 +334,16 @@ void handleTouch() {
     }
     return;
   }
+  if (currentView == View::kTopologyMap) {
+    if (x < kScreenWidth / 2) {
+      stopTopologyMap();
+      drawReconMenu();
+    } else {
+      lastTopologyCsvOk = exportTopologyToSd();
+      drawTopologyMap();
+    }
+    return;
+  }
   if (currentView == View::kKarmaWatch) {
     if (x < kScreenWidth / 2) {
       stopKarmaWatch();
@@ -719,7 +729,7 @@ bool toolBlocksSerialShortcuts() {
          probeLureActive || securityAuditActive || trackerScanActive ||
          harvesterActive || probeIntelActive || karmaWatchActive ||
          beaconWatchActive || authFloodActive || advancedWatchActive ||
-         locatorActive || fleetHuntActive || linkWardriveActive ||
+         locatorActive || fleetHuntActive || topologyActive || linkWardriveActive ||
          linkState == kLinkDiscovering || linkState == kLinkAwaitConfirm;
 }
 
@@ -749,6 +759,7 @@ void stopActiveTools() {
   if (advancedWatchActive) stopAdvancedWatch();
   if (locatorActive) stopLocator();
   if (fleetHuntActive) stopFleetHunt();
+  if (topologyActive) stopTopologyMap();
   if (linkWardriveActive) stopLinkWardrive();
   if (linkState == kLinkDiscovering || linkState == kLinkAwaitConfirm) {
     linkCancelPairing();
