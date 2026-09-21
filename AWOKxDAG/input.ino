@@ -324,6 +324,20 @@ void handleTouch() {
     }
     return;
   }
+  if (currentView == View::kSpectrogram) {
+    if (y >= kFooterTop) {
+      if (x < kScreenWidth / 2) {
+        stopSpectrogram();
+        drawReconMenu();
+      } else {
+        cycleSpectrogramMode();
+      }
+    } else if (y >= 58 && y <= 128) {
+      int touchedIdx = (x - 12) / 16;
+      handleSpectrogramBarTouch(touchedIdx);
+    }
+    return;
+  }
   if (currentView == View::kHarvester) {
     if (x < kScreenWidth / 2) {
       stopHarvester();
@@ -737,7 +751,7 @@ bool toolBlocksSerialShortcuts() {
          wardriveActive || pktmonActive || wpsScanActive || rogueWatchActive ||
          hiddenRevealActive || cameraActive || bleDetectActive ||
          probeLureActive || securityAuditActive || trackerScanActive ||
-         bleIntelActive || harvesterActive || probeIntelActive || karmaWatchActive ||
+         bleIntelActive || spectrogramActive || harvesterActive || probeIntelActive || karmaWatchActive ||
          beaconWatchActive || authFloodActive || advancedWatchActive ||
          locatorActive || fleetHuntActive || topologyActive || linkWardriveActive ||
          linkState == kLinkDiscovering || linkState == kLinkAwaitConfirm;
@@ -762,6 +776,7 @@ void stopActiveTools() {
   if (securityAuditActive) stopSecurityAudit();
   if (trackerScanActive) stopTrackerScan();
   if (bleIntelActive) stopBleIntel();
+  if (spectrogramActive) stopSpectrogram();
   if (harvesterActive) stopHarvester();
   if (probeIntelActive) stopProbeIntel();
   if (karmaWatchActive) stopKarmaWatch();

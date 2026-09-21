@@ -113,7 +113,7 @@ constexpr uint8_t kDeauthHopChannels[] = {
 constexpr int kDeauthHopChannelCount =
     static_cast<int>(sizeof(kDeauthHopChannels) / sizeof(kDeauthHopChannels[0]));
 constexpr int kMaxDeauthTargets = 8;
-constexpr char kVersion[] = "1.6.3-syz.1";
+constexpr char kVersion[] = "1.6.4";
 constexpr char kAuthor[] = "dag nazty";
 constexpr uint32_t kHandshakeRedrawMs = 500;
 constexpr uint32_t kHandshakePulseMs = 2000;
@@ -192,6 +192,38 @@ struct BleIntelEntry {
   uint32_t firstSeenMs = 0;
   uint32_t lastSeenMs = 0;
   uint32_t sightings = 0;
+};
+
+// Spectrogram: dual-band RF waterfall & channel duty cycle monitor.
+constexpr char kSpectrogramCsvPath[] = "/awokxdag/spectrogram.csv";
+constexpr uint32_t kSpectrogramDwellMs = 60;
+constexpr uint32_t kSpectrogramRedrawMs = 120;
+constexpr int kWaterfallHistoryRows = 28;
+constexpr int kSpectrogramHitQueueSlots = AwokPins::kDualBand ? 32 : 16;
+
+struct SpectrogramChannelStats {
+  uint8_t channel = 0;
+  uint8_t dutyPercent = 0;
+  uint16_t packetCount = 0;
+  uint32_t byteCount = 0;
+  int8_t peakRssi = -127;
+  int8_t avgNoise = -127;
+  uint16_t mgmtCount = 0;
+  uint16_t ctrlCount = 0;
+  uint16_t dataCount = 0;
+  uint32_t lastSeenMs = 0;
+};
+
+struct SpectrogramHit {
+  uint8_t channel = 0;
+  uint8_t dutyPercent = 0;
+  uint16_t packetCount = 0;
+  uint32_t byteCount = 0;
+  int8_t peakRssi = -127;
+  int8_t avgNoise = -127;
+  uint16_t mgmtCount = 0;
+  uint16_t ctrlCount = 0;
+  uint16_t dataCount = 0;
 };
 
 // Harvester: all-channel passive EAPOL/PMKID collection (no deauth).
@@ -397,7 +429,8 @@ enum class View {
   kWardriveUploadFiles,
   kFleetHunt,
   kTopologyMap,
-  kBleIntel
+  kBleIntel,
+  kSpectrogram
 };
 
 // ---- Link Mode (ESP-NOW pairing of two AxD units) -----------------------
@@ -455,7 +488,6 @@ struct FleetMember {
   uint32_t lastSeenMs = 0;  // coordinator: last FleetJoin/row heard
   uint32_t rows = 0;        // rows contributed (coordinator view)
   uint32_t ackSeq = 0;      // highest row seq stored from this member
-  uint8_t battery = 0;
 };
 
 // A suspected surveillance camera found by the camera scan.
@@ -568,9 +600,7 @@ struct DeviceSettingsRecord {
   uint32_t backlightTimeoutMs;  // 0 = always on
   uint8_t brightnessPercent;    // 20–100
   uint8_t flags;                // kSetting*
-  uint16_t batteryCapacityMah;
-  uint8_t batteryTunePercent;
-  uint8_t reserved[3];
+  uint8_t reserved[6];
 };
 static_assert(sizeof(DeviceSettingsRecord) == 20, "NVS settings layout changed");
 constexpr uint32_t kDeviceSettingsVersion = 1;
@@ -804,6 +834,14 @@ void radioSchedulerEnd(RadioScheduler& s);
 void wardriveResetDedup();
 void closeWardriveCsv();
 void flushWardriveCsv();
+
+void startSpectrogram();
+void stopSpectrogram();
+void updateSpectrogram();
+void drawSpectrogram();
+void cycleSpectrogramMode();
+void handleSpectrogramBarTouch(int touchedIdx);
+bool exportSpectrogramToSd();
 
 // Network Tools types precede Arduino-generated function prototypes.
 enum class NetJob { None, Join, Hosts, Ports, Cameras, Printers, Sip, Upnp };
