@@ -30,6 +30,7 @@ constexpr int kMaxSpecBuckets = 38;
 
 SpectrogramChannelStats specStats[kMaxSpecBuckets];
 uint8_t specPeakHold[kMaxSpecBuckets] = {0};
+static uint8_t specLevel[kMaxSpecBuckets] = {0};
 uint8_t waterfallHistory[kWaterfallHistoryRows][kMaxSpecBuckets] = {{0}};
 int waterfallHead = 0;
 
@@ -207,8 +208,21 @@ void spectrogramRecordDwell() {
   specStats[idx].dataCount = dwellData;
   specStats[idx].lastSeenMs = millis();
 
-  if (duty > specPeakHold[idx]) {
-    specPeakHold[idx] = duty;
+  int lvl = 0;
+  if (specStats[idx].peakRssi > -120) {
+    int snr = specStats[idx].peakRssi - avgNoise;
+    if (snr < 0) snr = 0;
+    lvl = snr * 2;
+    if (lvl > 100) lvl = 100;
+  }
+  if (lvl >= specLevel[idx]) {
+    specLevel[idx] = (uint8_t)lvl;
+  } else {
+    int d = (int)specLevel[idx] - 8;
+    specLevel[idx] = (uint8_t)(d > lvl ? d : lvl);
+  }
+  if (lvl > specPeakHold[idx]) {
+    specPeakHold[idx] = (uint8_t)lvl;
   }
 
   // Stream telemetry line: $SPEC,ch,dutyPct,pkts,peakRssi,noise,mgmt,ctrl,data
@@ -235,7 +249,7 @@ void spectrogramPushWaterfallRow() {
   total = kSpec24Count + kSpec5Count;
 #endif
   for (int i = 0; i < total; ++i) {
-    waterfallHistory[waterfallHead][i] = specStats[i].dutyPercent;
+    waterfallHistory[waterfallHead][i] = specLevel[i];
   }
 }
 
@@ -361,7 +375,7 @@ void drawSpectrogram() {
   uint8_t drow[kMaxSpecBuckets];
   uint8_t prow[kMaxSpecBuckets];
   for (int i = 0; i < total; ++i) {
-    drow[i] = specStats[base + i].dutyPercent;
+    drow[i] = specLevel[base + i];
     prow[i] = specPeakHold[base + i];
   }
   static uint8_t specLine[224];
@@ -519,6 +533,7 @@ void startSpectrogram() {
     specStats[i] = SpectrogramChannelStats();
     specStats[i].channel = specIndexToChannel(i);
     specPeakHold[i] = 0;
+    specLevel[i] = 0;
     for (int r = 0; r < kWaterfallHistoryRows; ++r) {
       waterfallHistory[r][i] = 0;
     }
