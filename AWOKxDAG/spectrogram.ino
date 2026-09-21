@@ -267,6 +267,33 @@ bool exportSpectrogramToSd() {
   return true;
 }
 
+static uint8_t specWfCurve(uint8_t v) {
+  static uint8_t lut[101];
+  static bool init = false;
+  if (!init) {
+    for (int i = 0; i <= 100; ++i) {
+      lut[i] = (uint8_t)(powf((float)i / 100.0f, 0.72f) * 100.0f + 0.5f);
+    }
+    init = true;
+  }
+  if (v > 100) v = 100;
+  return lut[v];
+}
+
+static void specBuildWaterfallLine(int dispRow, int base, int total, float span,
+                                   float spread, int bw, uint8_t* out) {
+  const int rowIdx = (waterfallHead - dispRow + kWaterfallHistoryRows) % kWaterfallHistoryRows;
+  const uint8_t* rv = &waterfallHistory[rowIdx][base];
+  for (int p = 0; p < bw; ++p) {
+    const float fx = (float)p * span / (float)(bw - 1);
+    const float iv = specSampleAt(rv, total, fx, spread);
+    int wv = (int)(iv + 0.5f);
+    if (wv < 0) wv = 0;
+    if (wv > 100) wv = 100;
+    out[p] = specWfCurve((uint8_t)wv);
+  }
+}
+
 void drawSpectrogram() {
   currentView = View::kSpectrogram;
   display.fillScreen(kBackground);
@@ -284,10 +311,10 @@ void drawSpectrogram() {
   const char* bandTag = (specMode == kSpecMode24) ? "2.4"
                        : (specMode == kSpecModeAll) ? "2+5"
                        : (specMode == kSpecMode5) ? "5G" : "LCK";
-  display.drawRoundRect(180, 6, 54, 28, 5, kAccent);
+  display.drawRoundRect(174, 5, 62, 30, 6, kAccent);
   display.setTextSize(1);
   display.setTextColor(kAccent, kBackground);
-  display.setCursor(180 + (54 - (int)strlen(bandTag) * 6) / 2, 16);
+  display.setCursor(174 + (62 - (int)strlen(bandTag) * 6) / 2, 16);
   display.print(bandTag);
 
 #ifdef AWOK_MINI_DISPLAY
@@ -331,15 +358,6 @@ void drawSpectrogram() {
   const float spread = (specMode == kSpecMode24) ? 1.5f : 0.95f;
   const float span = (total > 1) ? (float)(total - 1) : 1.0f;
 
-  static uint8_t wfCurve[101];
-  static bool wfCurveInit = false;
-  if (!wfCurveInit) {
-    for (int i = 0; i <= 100; ++i) {
-      wfCurve[i] = (uint8_t)(powf((float)i / 100.0f, 0.72f) * 100.0f + 0.5f);
-    }
-    wfCurveInit = true;
-  }
-
   uint8_t dutyVals[kMaxSpecBuckets];
   uint8_t peakVals[kMaxSpecBuckets];
   for (int i = 0; i < total; ++i) {
@@ -382,22 +400,30 @@ void drawSpectrogram() {
   }
 
   const int wTop = 138;
-  const int wRowH = 5;
+  const int wfBottom = kFooterTop;
+  const int wfH = wfBottom - wTop;
   int wRows = kWaterfallHistoryRows;
-  const int wMaxRows = (kFooterTop - wTop) / wRowH;
-  if (wRows > wMaxRows) wRows = wMaxRows;
+  if (wRows < 2) wRows = 2;
 
-  for (int r = 0; r < wRows; ++r) {
-    const int rowIdx = (waterfallHead - r + kWaterfallHistoryRows) % kWaterfallHistoryRows;
-    const uint8_t* rowVals = &waterfallHistory[rowIdx][base];
-    const int y = wTop + r * wRowH;
+  static uint8_t lineA[224];
+  static uint8_t lineB[224];
+  int builtRow = -1;
+  for (int y = wTop; y < wfBottom; ++y) {
+    const float hr = (float)(y - wTop) * (float)(wRows - 1) / (float)(wfH - 1);
+    int r0 = (int)hr;
+    if (r0 < 0) r0 = 0;
+    if (r0 > wRows - 2) r0 = wRows - 2;
+    const float f = hr - (float)r0;
+    if (builtRow != r0) {
+      specBuildWaterfallLine(r0, base, total, span, spread, bw, lineA);
+      specBuildWaterfallLine(r0 + 1, base, total, span, spread, bw, lineB);
+      builtRow = r0;
+    }
     for (int px = 0; px < bw; ++px) {
-      const float fx = (float)px * span / (float)(bw - 1);
-      const float iv = specSampleAt(rowVals, total, fx, spread);
-      int wv = (int)(iv + 0.5f);
-      if (wv < 0) wv = 0;
-      if (wv > 100) wv = 100;
-      display.drawFastVLine(bx0 + px, y, wRowH, specThermalColor(wfCurve[wv]));
+      int v = (int)((float)lineA[px] * (1.0f - f) + (float)lineB[px] * f + 0.5f);
+      if (v < 0) v = 0;
+      if (v > 100) v = 100;
+      display.drawPixel(bx0 + px, y, specThermalColor((uint8_t)v));
     }
   }
 

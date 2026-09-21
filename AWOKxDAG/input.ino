@@ -337,7 +337,7 @@ void handleTouch() {
       } else {
         spectrogramToggleHop();
       }
-    } else if (y < kHeaderHeight && x >= 176) {
+    } else if (y < 56 && x >= 168) {
       spectrogramCycleBand();
     } else if (y >= 58 && y <= 120) {
       const int total = specTotalChannels();
