@@ -90,43 +90,69 @@ int specTotalChannels() {
 #endif
 }
 
-uint16_t specThermalColor(uint8_t val) {
-  if (val > 100) val = 100;
+static uint16_t specPaletteLut[101];
+static uint8_t specGammaLut[101];
+static bool specLutInit = false;
+
+static void specInitLuts() {
   static const uint8_t stops[8][3] = {
-      { 16,  24, 180},
-      {  0,  48, 255},
-      {  0, 170, 255},
-      {  0, 240, 190},
+      {  6,  10,  72},
+      {  0,  36, 168},
+      {  0, 140, 240},
+      {  0, 230, 190},
       { 60, 255,  60},
       {240, 240,   0},
       {255, 140,   0},
       {255,  40,  40}};
-  float t = (float)val / 100.0f * 7.0f;
-  int i = (int)t;
-  if (i > 6) i = 6;
-  float f = t - (float)i;
-  int r = stops[i][0] + (int)((stops[i + 1][0] - stops[i][0]) * f);
-  int g = stops[i][1] + (int)((stops[i + 1][1] - stops[i][1]) * f);
-  int b = stops[i][2] + (int)((stops[i + 1][2] - stops[i][2]) * f);
-  return (uint16_t)(((r & 0xF8) << 8) | ((g & 0xFC) << 3) | (b >> 3));
+  for (int v = 0; v <= 100; ++v) {
+    float t = (float)v / 100.0f * 7.0f;
+    int i = (int)t;
+    if (i > 6) i = 6;
+    float f = t - (float)i;
+    int r = stops[i][0] + (int)((stops[i + 1][0] - stops[i][0]) * f);
+    int g = stops[i][1] + (int)((stops[i + 1][1] - stops[i][1]) * f);
+    int b = stops[i][2] + (int)((stops[i + 1][2] - stops[i][2]) * f);
+    specPaletteLut[v] = (uint16_t)(((r & 0xF8) << 8) | ((g & 0xFC) << 3) | (b >> 3));
+    specGammaLut[v] = (uint8_t)(powf((float)v / 100.0f, 0.72f) * 100.0f + 0.5f);
+  }
+  specLutInit = true;
 }
 
-static float specSampleAt(const uint8_t* vals, int n, float fx, float spread) {
-  if (n <= 1) return vals ? (float)vals[0] : 0.0f;
-  float num = 0.0f, den = 0.0f;
-  int lo = (int)(fx - spread) - 1;
-  int hi = (int)(fx + spread) + 1;
-  if (lo < 0) lo = 0;
-  if (hi > n - 1) hi = n - 1;
-  for (int i = lo; i <= hi; ++i) {
-    float d = ((float)i - fx) / spread;
-    if (d < 0.0f) d = -d;
-    if (d >= 1.0f) continue;
-    float w = 1.0f - d;
-    num += w * (float)vals[i];
-    den += w;
+uint16_t specThermalColor(uint8_t val) {
+  if (!specLutInit) specInitLuts();
+  if (val > 100) val = 100;
+  return specPaletteLut[val];
+}
+
+static uint8_t hmapLo[224];
+static uint8_t hmapFrac[224];
+static int hmapKey = -1;
+
+static void specBuildHMap(int total) {
+  const int bw = 224;
+  const int span = (total > 1) ? (total - 1) : 1;
+  for (int px = 0; px < bw; ++px) {
+    long pos = (long)px * span * 256 / (bw - 1);
+    int lo = (int)(pos >> 8);
+    if (lo < 0) lo = 0;
+    if (lo > total - 2) lo = (total >= 2) ? total - 2 : 0;
+    hmapLo[px] = (uint8_t)lo;
+    hmapFrac[px] = (uint8_t)(pos & 0xFF);
   }
-  return (den > 0.0f) ? (num / den) : 0.0f;
+  hmapKey = (int)specMode * 64 + total;
+}
+
+static void specResampleRow(const uint8_t* row, uint8_t* out) {
+  const int bw = 224;
+  for (int px = 0; px < bw; ++px) {
+    const int lo = hmapLo[px];
+    const int a = row[lo];
+    const int b = row[lo + 1];
+    int v = a + (((b - a) * (int)hmapFrac[px]) >> 8);
+    if (v < 0) v = 0;
+    if (v > 100) v = 100;
+    out[px] = (uint8_t)v;
+  }
 }
 
 void IRAM_ATTR spectrogramCallback(void* buf, wifi_promiscuous_pkt_type_t type) {
@@ -267,35 +293,9 @@ bool exportSpectrogramToSd() {
   return true;
 }
 
-static uint8_t specWfCurve(uint8_t v) {
-  static uint8_t lut[101];
-  static bool init = false;
-  if (!init) {
-    for (int i = 0; i <= 100; ++i) {
-      lut[i] = (uint8_t)(powf((float)i / 100.0f, 0.72f) * 100.0f + 0.5f);
-    }
-    init = true;
-  }
-  if (v > 100) v = 100;
-  return lut[v];
-}
-
-static void specBuildWaterfallLine(int dispRow, int base, int total, float span,
-                                   float spread, int bw, uint8_t* out) {
-  const int rowIdx = (waterfallHead - dispRow + kWaterfallHistoryRows) % kWaterfallHistoryRows;
-  const uint8_t* rv = &waterfallHistory[rowIdx][base];
-  for (int p = 0; p < bw; ++p) {
-    const float fx = (float)p * span / (float)(bw - 1);
-    const float iv = specSampleAt(rv, total, fx, spread);
-    int wv = (int)(iv + 0.5f);
-    if (wv < 0) wv = 0;
-    if (wv > 100) wv = 100;
-    out[p] = specWfCurve((uint8_t)wv);
-  }
-}
-
 void drawSpectrogram() {
   currentView = View::kSpectrogram;
+  if (!specLutInit) specInitLuts();
   display.fillScreen(kBackground);
 
   const char* modeLabel = (specMode == kSpecMode24) ? "2.4 GHz"
@@ -355,36 +355,39 @@ void drawSpectrogram() {
   const int bw = 224;
   const int sBaseY = 120;
   const int sMaxH = 62;
-  const float spread = (specMode == kSpecMode24) ? 1.5f : 0.95f;
-  const float span = (total > 1) ? (float)(total - 1) : 1.0f;
 
-  uint8_t dutyVals[kMaxSpecBuckets];
-  uint8_t peakVals[kMaxSpecBuckets];
+  if (hmapKey != (int)specMode * 64 + total) specBuildHMap(total);
+
+  uint8_t drow[kMaxSpecBuckets];
+  uint8_t prow[kMaxSpecBuckets];
   for (int i = 0; i < total; ++i) {
-    dutyVals[i] = specStats[base + i].dutyPercent;
-    peakVals[i] = specPeakHold[base + i];
+    drow[i] = specStats[base + i].dutyPercent;
+    prow[i] = specPeakHold[base + i];
   }
+  static uint8_t specLine[224];
+  static uint8_t peakLine[224];
+  specResampleRow(drow, specLine);
+  specResampleRow(prow, peakLine);
 
   for (int px = 0; px < bw; ++px) {
-    const float fx = (float)px * span / (float)(bw - 1);
-    const float iv = specSampleAt(dutyVals, total, fx, spread);
-    int h = (int)(iv * (float)sMaxH / 100.0f + 0.5f);
-    if (h < 1 && iv > 0.5f) h = 1;
-    if (h > sMaxH) h = sMaxH;
     const int x = bx0 + px;
-    display.drawFastVLine(x, sBaseY - sMaxH, sMaxH, specThermalColor(0));
-    if (h > 0) display.drawFastVLine(x, sBaseY - h, h, specThermalColor((uint8_t)(iv + 0.5f)));
-    const float pv = specSampleAt(peakVals, total, fx, spread);
-    int ph = (int)(pv * (float)sMaxH / 100.0f + 0.5f);
+    const int iv = specLine[px];
+    display.drawFastVLine(x, sBaseY - sMaxH, sMaxH, specPaletteLut[0]);
+    int h = iv * sMaxH / 100;
+    if (h < 1 && iv > 0) h = 1;
+    if (h > sMaxH) h = sMaxH;
+    if (h > 0) display.drawFastVLine(x, sBaseY - h, h, specPaletteLut[iv]);
+    const int pv = peakLine[px];
+    int ph = pv * sMaxH / 100;
     if (ph > sMaxH) ph = sMaxH;
-    if (pv > 0.5f) display.drawPixel(x, sBaseY - ph, ILI9341_WHITE);
+    if (pv > 0) display.drawPixel(x, sBaseY - ph, ILI9341_WHITE);
   }
 
   display.drawFastHLine(bx0, sBaseY, bw, kMuted);
 
   const int markIdx = specChannelToIndex(specCurrentChannel) - base;
   if (markIdx >= 0 && markIdx < total) {
-    const int mx = bx0 + (int)((float)markIdx * (float)(bw - 1) / span + 0.5f);
+    const int mx = bx0 + (total > 1 ? markIdx * (bw - 1) / (total - 1) : 0);
     display.drawFastVLine(mx, sBaseY - sMaxH - 2, sMaxH + 2, ILI9341_WHITE);
   }
 
@@ -393,7 +396,7 @@ void drawSpectrogram() {
     display.setTextColor(kMuted, kBackground);
     for (int li = 0; li < 3; ++li) {
       const int idx = labels[li] - 1;
-      const int lx = bx0 + (int)((float)idx * (float)(bw - 1) / span + 0.5f);
+      const int lx = bx0 + (total > 1 ? idx * (bw - 1) / (total - 1) : 0);
       display.setCursor(lx - (labels[li] < 10 ? 2 : 5), sBaseY + 3);
       display.print(labels[li]);
     }
@@ -402,28 +405,26 @@ void drawSpectrogram() {
   const int wTop = 138;
   const int wfBottom = kFooterTop;
   const int wfH = wfBottom - wTop;
-  int wRows = kWaterfallHistoryRows;
-  if (wRows < 2) wRows = 2;
-
+  const int wRows = kWaterfallHistoryRows;
   static uint8_t lineA[224];
   static uint8_t lineB[224];
   int builtRow = -1;
   for (int y = wTop; y < wfBottom; ++y) {
-    const float hr = (float)(y - wTop) * (float)(wRows - 1) / (float)(wfH - 1);
-    int r0 = (int)hr;
+    long hr = (long)(y - wTop) * (wRows - 1) * 256 / (wfH - 1);
+    int r0 = (int)(hr >> 8);
     if (r0 < 0) r0 = 0;
     if (r0 > wRows - 2) r0 = wRows - 2;
-    const float f = hr - (float)r0;
+    const int f = (int)(hr & 0xFF);
     if (builtRow != r0) {
-      specBuildWaterfallLine(r0, base, total, span, spread, bw, lineA);
-      specBuildWaterfallLine(r0 + 1, base, total, span, spread, bw, lineB);
+      specResampleRow(&waterfallHistory[(waterfallHead - r0 + wRows) % wRows][base], lineA);
+      specResampleRow(&waterfallHistory[(waterfallHead - (r0 + 1) + wRows) % wRows][base], lineB);
       builtRow = r0;
     }
     for (int px = 0; px < bw; ++px) {
-      int v = (int)((float)lineA[px] * (1.0f - f) + (float)lineB[px] * f + 0.5f);
+      int v = lineA[px] + (((lineB[px] - lineA[px]) * f) >> 8);
       if (v < 0) v = 0;
       if (v > 100) v = 100;
-      display.drawPixel(bx0 + px, y, specThermalColor((uint8_t)v));
+      display.drawPixel(bx0 + px, y, specPaletteLut[specGammaLut[v]]);
     }
   }
 
