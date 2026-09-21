@@ -80,13 +80,42 @@ int specTotalChannels() {
 }
 
 uint16_t specThermalColor(uint8_t val) {
-  if (val == 0) return 0x0842;           // dark navy (idle)
-  if (val < 15) return ILI9341_BLUE;     // low
-  if (val < 35) return ILI9341_CYAN;     // light traffic
-  if (val < 55) return ILI9341_GREEN;    // moderate
-  if (val < 75) return ILI9341_YELLOW;   // busy
-  if (val < 90) return ILI9341_RED;      // heavy congestion
-  return ILI9341_MAGENTA;                // saturated / flood
+  if (val > 100) val = 100;
+  static const uint8_t stops[8][3] = {
+      {  0,   0,  12},
+      {  8,   0,  72},
+      { 24,   8, 168},
+      {  0, 128, 200},
+      {  0, 200, 128},
+      {200, 216,  32},
+      {255, 128,   0},
+      {255, 255, 255}};
+  float t = (float)val / 100.0f * 7.0f;
+  int i = (int)t;
+  if (i > 6) i = 6;
+  float f = t - (float)i;
+  int r = stops[i][0] + (int)((stops[i + 1][0] - stops[i][0]) * f);
+  int g = stops[i][1] + (int)((stops[i + 1][1] - stops[i][1]) * f);
+  int b = stops[i][2] + (int)((stops[i + 1][2] - stops[i][2]) * f);
+  return (uint16_t)(((r & 0xF8) << 8) | ((g & 0xFC) << 3) | (b >> 3));
+}
+
+static float specSampleAt(const uint8_t* vals, int n, float fx, float spread) {
+  if (n <= 1) return vals ? (float)vals[0] : 0.0f;
+  float num = 0.0f, den = 0.0f;
+  int lo = (int)(fx - spread) - 1;
+  int hi = (int)(fx + spread) + 1;
+  if (lo < 0) lo = 0;
+  if (hi > n - 1) hi = n - 1;
+  for (int i = lo; i <= hi; ++i) {
+    float d = ((float)i - fx) / spread;
+    if (d < 0.0f) d = -d;
+    if (d >= 1.0f) continue;
+    float w = 1.0f - d;
+    num += w * (float)vals[i];
+    den += w;
+  }
+  return (den > 0.0f) ? (num / den) : 0.0f;
 }
 
 void IRAM_ATTR spectrogramCallback(void* buf, wifi_promiscuous_pkt_type_t type) {
@@ -235,7 +264,7 @@ void drawSpectrogram() {
   const int8_t curPeak = (curIdx >= 0) ? specStats[curIdx].peakRssi : -127;
   const int8_t curNoise = (curIdx >= 0) ? specStats[curIdx].avgNoise : -95;
 
-  drawHeader("SPECTROGRAM", String(modeLabel) + " · Ch " + String(specCurrentChannel) + " (" + String(curDuty) + "%)");
+  drawHeader("SPECTROGRAM", String(modeLabel) + " \xC2\xB7 Ch " + String(specCurrentChannel) + " (" + String(curDuty) + "%)");
 
 #ifdef AWOK_MINI_DISPLAY
   display.setTextSize(1);
@@ -259,7 +288,8 @@ void drawSpectrogram() {
   return;
 #endif
 
-  // Touch 240x320 Layout
+  const int total = specTotalChannels();
+
   display.setTextSize(1);
   display.setTextColor(ILI9341_WHITE, kBackground);
   display.setCursor(5, 46);
@@ -269,78 +299,68 @@ void drawSpectrogram() {
                  curPeak,
                  curNoise);
 
-  // Upper Bar Chart (Instantaneous Spectrum + Peak Hold)
-  constexpr int kChartBaseY = 120;
-  constexpr int kChartMaxH = 64;
-  const int totalCh = specTotalChannels();
+  const int bx0 = 8;
+  const int bw = 224;
+  const int sBaseY = 120;
+  const int sMaxH = 62;
+  const float spread = (specMode == kSpecMode24) ? 1.5f : 0.95f;
+  const float span = (total > 1) ? (float)(total - 1) : 1.0f;
+
+  uint8_t dutyVals[kMaxSpecBuckets];
+  uint8_t peakVals[kMaxSpecBuckets];
+  for (int i = 0; i < total; ++i) {
+    dutyVals[i] = specStats[i].dutyPercent;
+    peakVals[i] = specPeakHold[i];
+  }
+
+  for (int px = 0; px < bw; ++px) {
+    const float fx = (float)px * span / (float)(bw - 1);
+    const float iv = specSampleAt(dutyVals, total, fx, spread);
+    int h = (int)(iv * (float)sMaxH / 100.0f + 0.5f);
+    if (h < 1 && iv > 0.5f) h = 1;
+    if (h > sMaxH) h = sMaxH;
+    const int x = bx0 + px;
+    if (h > 0) display.drawFastVLine(x, sBaseY - h, h, specThermalColor((uint8_t)(iv + 0.5f)));
+    const float pv = specSampleAt(peakVals, total, fx, spread);
+    int ph = (int)(pv * (float)sMaxH / 100.0f + 0.5f);
+    if (ph > sMaxH) ph = sMaxH;
+    if (pv > 0.5f) display.drawPixel(x, sBaseY - ph, ILI9341_WHITE);
+  }
+
+  display.drawFastHLine(bx0, sBaseY, bw, kMuted);
+
+  const int markIdx = specChannelToIndex(specCurrentChannel);
+  if (markIdx >= 0 && markIdx < total) {
+    const int mx = bx0 + (int)((float)markIdx * (float)(bw - 1) / span + 0.5f);
+    display.drawFastVLine(mx, sBaseY - sMaxH - 2, sMaxH + 2, kAccent);
+  }
 
   if (specMode == kSpecMode24) {
-    // 13 channels: 16px pitch
-    for (int i = 0; i < kSpec24Count; ++i) {
-      const int ch = kSpec24Channels[i];
-      const int duty = specStats[i].dutyPercent;
-      const int barH = max(1, duty * kChartMaxH / 100);
-      const int x = 12 + i * 16;
-
-      // Active bar
-      display.fillRect(x, kChartBaseY - barH, 12, barH, specThermalColor(duty));
-
-      // Peak hold line
-      const int peakH = max(1, static_cast<int>(specPeakHold[i]) * kChartMaxH / 100);
-      display.drawFastHLine(x, kChartBaseY - peakH, 12, ILI9341_WHITE);
-
-      // Active channel marker
-      if (ch == specCurrentChannel) {
-        display.drawRect(x - 1, kChartBaseY - kChartMaxH - 2, 14, kChartMaxH + 4, kAccent);
-      }
-
-      // Channel text
-      display.setTextColor((ch == specCurrentChannel) ? kAccent : kMuted, kBackground);
-      display.setCursor(x + (ch < 10 ? 3 : 0), kChartBaseY + 2);
-      display.print(ch);
-    }
-  } else {
-    // All channels (up to 38): 6px pitch
-    for (int i = 0; i < totalCh; ++i) {
-      const int duty = specStats[i].dutyPercent;
-      const int barH = max(1, duty * kChartMaxH / 100);
-      const int x = 6 + i * 6;
-
-      display.fillRect(x, kChartBaseY - barH, 4, barH, specThermalColor(duty));
-
-      const int peakH = max(1, static_cast<int>(specPeakHold[i]) * kChartMaxH / 100);
-      display.drawFastHLine(x, kChartBaseY - peakH, 4, ILI9341_WHITE);
-
-      if (specIndexToChannel(i) == specCurrentChannel) {
-        display.drawFastVLine(x + 2, kChartBaseY - kChartMaxH - 2, 4, kAccent);
-      }
+    const int labels[3] = {1, 6, 11};
+    display.setTextColor(kMuted, kBackground);
+    for (int li = 0; li < 3; ++li) {
+      const int idx = labels[li] - 1;
+      const int lx = bx0 + (int)((float)idx * (float)(bw - 1) / span + 0.5f);
+      display.setCursor(lx - (labels[li] < 10 ? 2 : 5), sBaseY + 3);
+      display.print(labels[li]);
     }
   }
 
-  // Divider
   display.drawFastHLine(4, 134, 232, 0x3186);
 
-  // Lower Waterfall Heat Map (26 rows, scrolling downward)
-  constexpr int kWaterTopY = 138;
-  constexpr int kWaterRowH = 5;
-  constexpr int kWaterDisplayRows = 26;
+  const int wTop = 138;
+  const int wRowH = 6;
+  int wRows = kWaterfallHistoryRows;
+  if (wRows > 26) wRows = 26;
 
-  for (int r = 0; r < kWaterDisplayRows; ++r) {
+  for (int r = 0; r < wRows; ++r) {
     const int rowIdx = (waterfallHead - r + kWaterfallHistoryRows) % kWaterfallHistoryRows;
-    const int y = kWaterTopY + r * kWaterRowH;
-
-    if (specMode == kSpecMode24) {
-      for (int i = 0; i < kSpec24Count; ++i) {
-        const uint8_t val = waterfallHistory[rowIdx][i];
-        const int x = 12 + i * 16;
-        display.fillRect(x, y, 12, kWaterRowH - 1, specThermalColor(val));
-      }
-    } else {
-      for (int i = 0; i < totalCh; ++i) {
-        const uint8_t val = waterfallHistory[rowIdx][i];
-        const int x = 6 + i * 6;
-        display.fillRect(x, y, 4, kWaterRowH - 1, specThermalColor(val));
-      }
+    const uint8_t* rowVals = waterfallHistory[rowIdx];
+    const int y = wTop + r * wRowH;
+    for (int px = 0; px < bw; px += 2) {
+      const float fx = (float)px * span / (float)(bw - 1);
+      const float iv = specSampleAt(rowVals, total, fx, spread);
+      display.fillRect(bx0 + px, y, 2, wRowH - 1, specThermalColor((uint8_t)(iv + 0.5f)));
     }
   }
 
