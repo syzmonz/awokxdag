@@ -442,7 +442,7 @@ void drawSpectrogram() {
     }
   }
 
-  drawFourButtonFooter("Back", "Ch-", "Ch+", "Hop");
+  drawFourButtonFooter("Back", "Ch-", "Ch+", "Band");
 }
 
 static void specResetDwell() {

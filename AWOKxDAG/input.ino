@@ -335,7 +335,7 @@ void handleTouch() {
       } else if (zone == 2) {
         spectrogramLockStep(1);
       } else {
-        spectrogramToggleHop();
+        spectrogramCycleBand();
       }
     } else if (y < 56 && x >= 168) {
       spectrogramCycleBand();
