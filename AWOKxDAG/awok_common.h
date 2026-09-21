@@ -113,7 +113,7 @@ constexpr uint8_t kDeauthHopChannels[] = {
 constexpr int kDeauthHopChannelCount =
     static_cast<int>(sizeof(kDeauthHopChannels) / sizeof(kDeauthHopChannels[0]));
 constexpr int kMaxDeauthTargets = 8;
-constexpr char kVersion[] = "1.6.4";
+constexpr char kVersion[] = "1.6.4-syz.1";
 constexpr char kAuthor[] = "dag nazty";
 constexpr uint32_t kHandshakeRedrawMs = 500;
 constexpr uint32_t kHandshakePulseMs = 2000;
@@ -488,6 +488,7 @@ struct FleetMember {
   uint32_t lastSeenMs = 0;  // coordinator: last FleetJoin/row heard
   uint32_t rows = 0;        // rows contributed (coordinator view)
   uint32_t ackSeq = 0;      // highest row seq stored from this member
+  uint8_t battery = 0;
 };
 
 // A suspected surveillance camera found by the camera scan.
@@ -600,7 +601,9 @@ struct DeviceSettingsRecord {
   uint32_t backlightTimeoutMs;  // 0 = always on
   uint8_t brightnessPercent;    // 20–100
   uint8_t flags;                // kSetting*
-  uint8_t reserved[6];
+  uint16_t batteryCapacityMah;
+  uint8_t batteryTunePercent;
+  uint8_t reserved[3];
 };
 static_assert(sizeof(DeviceSettingsRecord) == 20, "NVS settings layout changed");
 constexpr uint32_t kDeviceSettingsVersion = 1;

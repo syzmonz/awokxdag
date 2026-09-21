@@ -280,9 +280,11 @@ void fleetBroadcastRoster() {
   r.sinkNodeIndex = fleetSinkIndex < 0 ? 0xFF : static_cast<uint8_t>(fleetSinkIndex);
   r.coordIndex = static_cast<uint8_t>(fleetCoordIndex);
   r.wardriveOn = fleetWardriveOn ? 1 : 0;
+  fleetMembers[fleetCoordIndex].battery = static_cast<uint8_t>(batteryPercentNow());
   for (int i = 0; i < fleetMemberCount && i < kFleetMaxNodes; ++i) {
     memcpy(r.members[i].mac, fleetMembers[i].mac, 6);
     r.members[i].caps = fleetMembers[i].caps;
+    r.members[i].battery = fleetMembers[i].battery;
   }
   if (!linkWardriveActive) {
     esp_wifi_set_channel(kLinkChannel, WIFI_SECOND_CHAN_NONE);
@@ -322,6 +324,7 @@ void fleetStartCoordinator() {
   fleetMembers[0].lastSeenMs = millis();
   fleetMembers[0].rows = 0;
   fleetMembers[0].ackSeq = 0;
+  fleetMembers[0].battery = 0;
   fleetCoordIndex = 0;
   fleetMyIndex = 0;
   fleetRowSeq = 0;
@@ -422,6 +425,7 @@ void fleetApplyRoster(const FleetRoster& r) {
   for (int i = 0; i < fleetMemberCount; ++i) {
     memcpy(fleetMembers[i].mac, r.members[i].mac, 6);
     fleetMembers[i].caps = r.members[i].caps;
+    fleetMembers[i].battery = r.members[i].battery;
   }
   fleetCoordIndex = r.coordIndex;
   fleetBleNodeIndex = r.bleNodeIndex == 0xFF ? -1 : r.bleNodeIndex;
@@ -545,6 +549,7 @@ void fleetQueueOutRow(const uint8_t* id, const String& name, uint8_t auth,
   r.channel = channel;
   r.auth = auth;
   r.isBle = isBle ? 1 : 0;
+  r.battery = static_cast<uint8_t>(batteryPercentNow());
   r.lat = gps.location.isValid() ? static_cast<float>(gps.location.lat()) : 0.0f;
   r.lon = gps.location.isValid() ? static_cast<float>(gps.location.lng()) : 0.0f;
   r.alt = static_cast<int16_t>(gps.altitude.isValid() ? gps.altitude.meters() : 0);
@@ -593,6 +598,7 @@ void fleetCoordDrainRows() {
         fleetMembers[m].ackSeq = r.seq;
       }
       fleetMembers[m].rows++;
+      fleetMembers[m].battery = r.battery;
     }
     wardriveEmitPeerRow(r);  // dedups by id; writes SD + streams to phone
   }
@@ -961,6 +967,37 @@ void linkDrainPackets() {
 // Stream the current Wi-Fi scan list to the phone (screen -> bridge -> BLE), one
 // AxdWifiResult per AP. Sent while homed on the rendezvous channel, where the
 // bridge listens.
+void linkStreamBleResults() {
+  const int n = bleCount;
+#ifdef AWOK_HEADLESS
+  for (int i = 0; i < n; ++i) {
+    uint8_t body[3 + 46];
+    body[0] = static_cast<uint8_t>(i);
+    body[1] = static_cast<uint8_t>(n);
+    body[2] = static_cast<uint8_t>(static_cast<int8_t>(bleEntries[i].rssi));
+    String t = bleEntries[i].name + "\t" + bleEntries[i].address;
+    size_t tl = t.length(); if (tl > 46) tl = 46;
+    memcpy(body + 3, t.c_str(), tl);
+    bridgeNotifyResult(3, body, 3 + tl);
+    delay(30);
+  }
+  return;
+#else
+  if (!linkEspNowReady) return;
+  esp_wifi_set_channel(kLinkChannel, WIFI_SECOND_CHAN_NONE);
+  for (int i = 0; i < n; ++i) {
+    AxdBleResult r;
+    r.index = static_cast<uint8_t>(i);
+    r.count = static_cast<uint8_t>(n);
+    r.rssi = static_cast<int8_t>(bleEntries[i].rssi);
+    strncpy(r.addr, bleEntries[i].address.c_str(), sizeof(r.addr) - 1);
+    strncpy(r.name, bleEntries[i].name.c_str(), sizeof(r.name) - 1);
+    esp_now_send(kLinkBroadcastAddr, reinterpret_cast<uint8_t*>(&r), sizeof(r));
+    delay(30);
+  }
+#endif
+}
+
 void linkStreamWifiResults() {
   const int n = wifiCount;
 #ifdef AWOK_HEADLESS
@@ -1079,22 +1116,53 @@ void linkDispatchCommand(uint8_t op, uint8_t arg) {
   }
 }
 
+extern volatile uint32_t lureProbes;
+extern int auditCount;
+extern int trackerCount;
+extern int probeSsidCount;
+extern int wpsCount;
+static void linkToolCounters(uint32_t& a, uint32_t& b) {
+  switch (currentView) {
+    case View::kDeauthAttack: a = deauthFramesSent; b = (uint32_t)deauthTargetCount; break;
+    case View::kHandshake: a = handshakeEapolCount; b = handshakePmkidSeen ? 1u : 0u; break;
+    case View::kBeaconFlood: a = beaconFramesSent; b = 0; break;
+    case View::kEvilPortal: a = portalCredsCount; b = 0; break;
+    case View::kProbeLure: a = lureProbes; b = 0; break;
+    case View::kAuthFlood: a = authFloodTotal; b = 0; break;
+    case View::kClientSniffer: a = (uint32_t)clientCount; b = 0; break;
+    case View::kDeauthMonitor: a = deauthFrameCount; b = disassocFrameCount; break;
+    case View::kBeaconWatch: a = beaconWatchTotal; b = 0; break;
+    case View::kBleSpamWatch: a = bleDetectSpam; b = bleDetectTotal; break;
+    case View::kHarvester: a = harvestSeenCount; b = harvestPmkidCount; break;
+    case View::kSecurityAudit: a = (uint32_t)auditCount; b = 0; break;
+    case View::kTrackerScan: a = (uint32_t)trackerCount; b = 0; break;
+    case View::kProbeIntel: a = (uint32_t)probeSsidCount; b = 0; break;
+    case View::kKarmaWatch: a = (uint32_t)karmaApCount; b = 0; break;
+    case View::kAdvancedWatch: a = (uint32_t)advancedApCount; b = 0; break;
+    case View::kHiddenReveal: a = (uint32_t)hiddenCount; b = 0; break;
+    case View::kCameraScan: a = (uint32_t)cameraCount; b = 0; break;
+    case View::kWpsScan: a = (uint32_t)wpsCount; b = 0; break;
+    default: break;
+  }
+}
+
 void linkBroadcastStatus() {
   const bool wardriving = wardriveActive || linkWardriveActive || fleetWardriveOn ||
                           (currentView == View::kWardrive) || (currentView == View::kLinkWardrive);
-  const uint32_t nets = wardriving
+  uint32_t nets = wardriving
                             ? wardriveNetworks
                             : (wifiCount > 0 ? (uint32_t)wifiCount : wardriveNetworks);
-  const uint32_t ble = wardriving
+  uint32_t ble = wardriving
                            ? wardriveBleCount
                            : (bleCount > 0 ? (uint32_t)bleCount : wardriveBleCount);
+  linkToolCounters(nets, ble);
   const uint8_t view = static_cast<uint8_t>(currentView);
 #ifdef AWOK_HEADLESS
   // Bridge -> phone directly: [wifi u32][ble u32][tool u8][gpsFix u8][sats u8]
   // [lat f32][lon f32] (source tag prefixed by bridgeNotifyStatus). The app
   // reads the GPS tail when present so the headless bridge's fix shows on-phone.
   // ...then a fleet tail: [active u8][members u8][code u16][coordinator u8].
-  uint8_t blob[24];
+  uint8_t blob[25];
   memcpy(blob + 0, &nets, 4);
   memcpy(blob + 4, &ble, 4);
   blob[8] = view;
@@ -1112,6 +1180,7 @@ void linkBroadcastStatus() {
   blob[23] = (fleetCoordinator ? 0x01 : 0) |
              (fleetListening && !fleetActive ? 0x02 : 0) |
              (fleetWardriveOn ? 0x04 : 0);
+  blob[24] = static_cast<uint8_t>(batteryPercentNow());
   bridgeNotifyStatus(kSourceBridge, blob, sizeof(blob));
   return;
 #else
@@ -1136,6 +1205,7 @@ void linkBroadcastStatus() {
   const float lon = gps.location.isValid() ? static_cast<float>(gps.location.lng()) : 0.0f;
   memcpy(&p.sessionId, &lat, sizeof(lat));
   memcpy(&p.masterMillis, &lon, sizeof(lon));
+  p.role = static_cast<uint8_t>(batteryPercentNow());
   esp_now_send(kLinkBroadcastAddr, reinterpret_cast<uint8_t*>(&p), sizeof(p));
 #endif
 }
@@ -1511,6 +1581,9 @@ void updateLink() {
     }
     if (now - lastRemoteStatusMs >= 1000) {
       lastRemoteStatusMs = now;
+      if (toolBlocksSerialShortcuts() && !scanInProgress && !wifiScanContinuous) {
+        esp_wifi_set_channel(kLinkChannel, WIFI_SECOND_CHAN_NONE);
+      }
       linkBroadcastStatus();
     }
     return;
@@ -1623,10 +1696,10 @@ void drawFleetStatus() {
     const bool me = (i == fleetMyIndex);
     display.setTextColor(me ? ILI9341_WHITE : kMuted, kBackground);
     display.setCursor(6, y);
-    display.printf("M%d %-5s %02x%02x %lu%s", i, fleetRoleLabel(i),
+    display.printf("M%d %-5s %02x%02x %lu %d%%%s", i, fleetRoleLabel(i),
                    fleetMembers[i].mac[4], fleetMembers[i].mac[5],
                    static_cast<unsigned long>(fleetMembers[i].rows),
-                   me ? " *" : "");
+                   fleetMembers[i].battery, me ? " *" : "");
     y += 12;
   }
 

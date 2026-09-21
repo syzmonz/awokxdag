@@ -28,6 +28,7 @@ enum LinkMsgType : uint8_t {
   kLinkMsgTelem = 3,       // running counts + channel + session id (status back)
   kLinkMsgCommand = 4,     // bridge -> screen: run a tool (opcode in `reserved`)
   kLinkMsgWifiResult = 5,  // screen -> bridge: one scanned AP (AxdWifiResult)
+  kLinkMsgBleResult = 14,
   // Fleet Wardrive (N linked nodes splitting the channel plan into one CSV):
   kLinkMsgFleetInvite = 6,    // coordinator -> all: join my session (LinkPacket)
   kLinkMsgFleetJoin = 7,      // member -> coordinator: joining (caps in flags)
@@ -78,6 +79,17 @@ constexpr uint8_t kLinkTelemGpsFix = 0x10;
 // a list and pick a target. Shares the magic/version/type prefix with LinkPacket
 // so the bridge can tell frames apart by type; it is a different size (~50 B),
 // which is fine over ESP-NOW (250 B max). The phone selects by `index`.
+struct AxdBleResult {
+  uint32_t magic = kLinkMagic;
+  uint8_t version = kLinkProtoVersion;
+  uint8_t type = kLinkMsgBleResult;
+  uint8_t index = 0;
+  uint8_t count = 0;
+  int8_t rssi = -127;
+  char addr[18] = {0};
+  char name[24] = {0};
+};
+
 struct AxdWifiResult {
   uint32_t magic = kLinkMagic;
   uint8_t version = kLinkProtoVersion;
@@ -118,6 +130,7 @@ struct FleetRoster {
   struct Member {
     uint8_t mac[6] = {0};
     uint8_t caps = 0;
+    uint8_t battery = 0;
   } members[kFleetMaxNodes];
 };
 
@@ -134,6 +147,7 @@ struct FleetWardriveRow {
   uint8_t channel = 0;
   uint8_t auth = 0;      // wifi_auth_mode_t
   uint8_t isBle = 0;
+  uint8_t battery = 0;
   float lat = 0.0f;
   float lon = 0.0f;
   int16_t alt = 0;
