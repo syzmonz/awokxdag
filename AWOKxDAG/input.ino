@@ -326,15 +326,24 @@ void handleTouch() {
   }
   if (currentView == View::kSpectrogram) {
     if (y >= kFooterTop) {
-      if (x < kScreenWidth / 2) {
+      const int zone = x / (kScreenWidth / 4);
+      if (zone <= 0) {
         stopSpectrogram();
         drawReconMenu();
+      } else if (zone == 1) {
+        spectrogramLockStep(-1);
+      } else if (zone == 2) {
+        spectrogramLockStep(1);
       } else {
-        cycleSpectrogramMode();
+        spectrogramToggleHop();
       }
-    } else if (y >= 58 && y <= 128) {
-      int touchedIdx = (x - 12) / 16;
-      handleSpectrogramBarTouch(touchedIdx);
+    } else if (y < kHeaderHeight && x >= 176) {
+      spectrogramCycleBand();
+    } else if (y >= 58 && y <= 120) {
+      const int total = specTotalChannels();
+      const float span = (total > 1) ? (float)(total - 1) : 1.0f;
+      int idx = (int)((float)(x - 8) * span / 223.0f + 0.5f);
+      spectrogramLockToIndex(specBandBase() + idx);
     }
     return;
   }
