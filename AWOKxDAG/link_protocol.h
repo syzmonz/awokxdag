@@ -195,6 +195,7 @@ enum AxdSource : uint8_t {
   kSourceWardrive = 2,  // results char carries a WiGLE CSV text row (bridge)
   kSourceHunt = 3,      // results char carries a Fleet Hunter text row
   kSourceTopo = 4,      // results char carries a Topology Map text row
+  kSourceBleIntel = 5,  // results char carries a BLE Intel telemetry row
 };
 
 // Multi-node Fleet Hunter observation frame (ESP-NOW)
@@ -288,6 +289,7 @@ enum AxdCommand : uint8_t {
   kAxdCmdTrackSel = 54,     // RSSI-track the selected AP
   kAxdCmdFleetHunt = 55,    // multi-node target hunt / trilateration on selected AP
   kAxdCmdTopology = 56,     // live swarm mesh topology mapping
+  kAxdCmdBleIntel = 57,     // BLE ecosystem intel & continuity decoder
   // Fleet Wardrive control (multi-node; joining is always deliberate).
   kAxdCmdFleetStart = 60,   // become coordinator + start the fleet wardrive
   kAxdCmdFleetJoin = 61,    // arm this chip to auto-join a coordinator's fleet

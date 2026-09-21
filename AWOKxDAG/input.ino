@@ -314,6 +314,16 @@ void handleTouch() {
     }
     return;
   }
+  if (currentView == View::kBleIntel) {
+    if (x < kScreenWidth / 2) {
+      stopBleIntel();
+      drawReconMenu();
+    } else {
+      lastBleIntelCsvOk = exportBleIntelToSd();
+      drawBleIntel();
+    }
+    return;
+  }
   if (currentView == View::kHarvester) {
     if (x < kScreenWidth / 2) {
       stopHarvester();
@@ -727,7 +737,7 @@ bool toolBlocksSerialShortcuts() {
          wardriveActive || pktmonActive || wpsScanActive || rogueWatchActive ||
          hiddenRevealActive || cameraActive || bleDetectActive ||
          probeLureActive || securityAuditActive || trackerScanActive ||
-         harvesterActive || probeIntelActive || karmaWatchActive ||
+         bleIntelActive || harvesterActive || probeIntelActive || karmaWatchActive ||
          beaconWatchActive || authFloodActive || advancedWatchActive ||
          locatorActive || fleetHuntActive || topologyActive || linkWardriveActive ||
          linkState == kLinkDiscovering || linkState == kLinkAwaitConfirm;
@@ -751,6 +761,7 @@ void stopActiveTools() {
   if (probeLureActive) stopProbeLure();
   if (securityAuditActive) stopSecurityAudit();
   if (trackerScanActive) stopTrackerScan();
+  if (bleIntelActive) stopBleIntel();
   if (harvesterActive) stopHarvester();
   if (probeIntelActive) stopProbeIntel();
   if (karmaWatchActive) stopKarmaWatch();
