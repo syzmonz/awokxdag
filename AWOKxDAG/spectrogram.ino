@@ -243,14 +243,29 @@ void spectrogramRecordDwell() {
 }
 
 void spectrogramPushWaterfallRow() {
-  waterfallHead = (waterfallHead + 1) % kWaterfallHistoryRows;
-  int total = kSpec24Count;
+    waterfallHead = (waterfallHead + 1) % kWaterfallHistoryRows;
+
+    memset(waterfallHistory[waterfallHead], 0, kMaxSpecBuckets);
+
+    if (specMode == kSpecModeLock) {
+        const int idx = specChannelToIndex(specLockedChannel);
+
+        if (idx >= 0 && idx < kMaxSpecBuckets) {
+            waterfallHistory[waterfallHead][idx] = specLevel[idx];
+        }
+
+        return;
+    }
+
+    int total = kSpec24Count;
+
 #ifndef AWOK_CLASSIC_ESP32
-  total = kSpec24Count + kSpec5Count;
+    total = kSpec24Count + kSpec5Count;
 #endif
-  for (int i = 0; i < total; ++i) {
-    waterfallHistory[waterfallHead][i] = specLevel[i];
-  }
+
+    for (int i = 0; i < total; ++i) {
+        waterfallHistory[waterfallHead][i] = specLevel[i];
+    }
 }
 
 bool exportSpectrogramToSd() {
@@ -465,16 +480,21 @@ int spectrogramFullChannelCount() {
 }
 
 void spectrogramLockToIndex(int idx) {
-  const int total = spectrogramFullChannelCount();
-  if (idx < 0) idx = 0;
-  if (idx >= total) idx = total - 1;
-  specMode = kSpecModeLock;
-  specLockedChannel = specIndexToChannel(idx);
-  specCurrentChannel = specLockedChannel;
-  esp_wifi_set_channel(specCurrentChannel, WIFI_SECOND_CHAN_NONE);
-  lastSpecHopMs = millis();
-  specResetDwell();
-  drawSpectrogram();
+    const int total = spectrogramFullChannelCount();
+    if (idx < 0) idx = 0;
+    if (idx >= total) idx = total - 1;
+
+    memset(specLevel, 0, sizeof(specLevel));
+    memset(specPeakHold, 0, sizeof(specPeakHold));
+
+    specMode = kSpecModeLock;
+    specLockedChannel = specIndexToChannel(idx);
+    specCurrentChannel = specLockedChannel;
+
+    esp_wifi_set_channel(specCurrentChannel, WIFI_SECOND_CHAN_NONE);
+    lastSpecHopMs = millis();
+    specResetDwell();
+    drawSpectrogram();
 }
 
 void spectrogramLockStep(int dir) {
