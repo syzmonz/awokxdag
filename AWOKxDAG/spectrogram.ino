@@ -335,7 +335,7 @@ void drawSpectrogram() {
   const int8_t curPeak = (curIdx >= 0) ? specStats[curIdx].peakRssi : -127;
   const int8_t curNoise = (curIdx >= 0) ? specStats[curIdx].avgNoise : -95;
 
-  drawHeader("SPECTROGRAM", String(modeLabel) + " \xC2\xB7 Ch " + String(specCurrentChannel) + " (" + String(curDuty) + "%)");
+  drawHeader("SPECTROGRAM", String(modeLabel) + " | Ch " + String(specCurrentChannel) + " (" + String(curDuty) + "%)");
 
   const char* bandTag = (specMode == kSpecMode24) ? "2.4"
                        : (specMode == kSpecModeAll) ? "2+5"
