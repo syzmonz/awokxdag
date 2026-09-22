@@ -275,9 +275,9 @@ void wardriveResetDedup() {
 // first index not already on the card, so every Start (solo, link, or fleet)
 // writes a new file instead of appending to one growing log.
 bool openWardriveCsv() {
-  if (!ensureSdCard()) return false;
   closeWardriveCsv();
   g_wardriveCsvPath = "";
+  if (!ensureSdCard()) return false;
   for (int n = 1; n <= 9999; ++n) {
     char buf[48];
     snprintf(buf, sizeof(buf), "%s/wardrive-%04d.csv", kSdDirectory, n);
@@ -293,14 +293,31 @@ bool openWardriveCsv() {
     wardriveCsvReady = false;
     return false;
   }
-  g_wardriveFile.println(
-      String("WigleWifi-1.6,appRelease=AxD,model=") + AwokPins::kChipLabel + ",release=" +
-      kVersion +
-      ",device=AxD,display=ILI9341,board=" + AwokPins::kBoardLabel + ",brand=AxD");
-  g_wardriveFile.println(
+  // Build both header lines without temporary heap Strings. A failed/short
+  // header write must never leave a ready session that appends headerless rows.
+  char header[512];
+  const int headerLength = snprintf(
+      header, sizeof(header),
+      "WigleWifi-1.6,appRelease=AxD,model=%s,release=%s,device=AxD,"
+      "display=ILI9341,board=%s,brand=AxD\r\n"
       "MAC,SSID,AuthMode,FirstSeen,Channel,Frequency,RSSI,CurrentLatitude,"
-      "CurrentLongitude,AltitudeMeters,AccuracyMeters,RCOIs,MfgrId,Type");
+      "CurrentLongitude,AltitudeMeters,AccuracyMeters,RCOIs,MfgrId,Type\r\n",
+      AwokPins::kChipLabel, kVersion, AwokPins::kBoardLabel);
+  const bool headerFits = headerLength > 0 &&
+                         static_cast<size_t>(headerLength) < sizeof(header);
+  const size_t written = headerFits
+      ? g_wardriveFile.write(reinterpret_cast<const uint8_t*>(header), headerLength)
+      : 0;
   g_wardriveFile.flush();
+  if (!headerFits || written != static_cast<size_t>(headerLength) ||
+      g_wardriveFile.size() != static_cast<size_t>(headerLength)) {
+    Serial.println("[wardrive] CSV header write failed; SD logging disabled");
+    closeWardriveCsv();
+    SD.remove(g_wardriveCsvPath.c_str());  // only this newly created, incomplete session
+    g_wardriveCsvPath = "";
+    sdReady = false;
+    return false;
+  }
   wardriveCsvReady = true;
   Serial.printf("[wardrive] logging to %s\n", g_wardriveCsvPath.c_str());
   return true;

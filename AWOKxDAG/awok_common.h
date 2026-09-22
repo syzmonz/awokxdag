@@ -53,8 +53,9 @@ bool radiosCoexist = true;     // C5: Wi-Fi + BLE run resident together
 extern volatile bool g_bridgePhoneConnected;
 void bridgeBleBegin();
 void bridgeNotifyStatus(uint8_t source, const uint8_t* body, size_t len);
-void bridgeNotifyResult(uint8_t source, const uint8_t* body, size_t len);
+bool bridgeNotifyResult(uint8_t source, const uint8_t* body, size_t len);
 void bridgeServiceCommand();
+bool bridgeFileReceiverReady(uint32_t token);
 #else
 #ifdef AWOK_CLASSIC_ESP32
 bool radiosCoexist = false;
@@ -113,7 +114,7 @@ constexpr uint8_t kDeauthHopChannels[] = {
 constexpr int kDeauthHopChannelCount =
     static_cast<int>(sizeof(kDeauthHopChannels) / sizeof(kDeauthHopChannels[0]));
 constexpr int kMaxDeauthTargets = 8;
-constexpr char kVersion[] = "1.6.4-syz.2";
+constexpr char kVersion[] = "1.7.0-syz.1";
 constexpr char kAuthor[] = "dag nazty";
 constexpr uint32_t kHandshakeRedrawMs = 500;
 constexpr uint32_t kHandshakePulseMs = 2000;
@@ -224,6 +225,74 @@ struct SpectrogramHit {
   uint16_t mgmtCount = 0;
   uint16_t ctrlCount = 0;
   uint16_t dataCount = 0;
+};
+
+// Wi-Fi 6 Intel: 802.11ax HE capabilities, BSS Color, and spatial reuse intelligence
+constexpr char kWifi6IntelCsvPath[] = "/awokxdag/wifi6_intel.csv";
+constexpr uint32_t kWifi6HopIntervalMs = 250;
+constexpr uint32_t kWifi6RedrawMs = 600;
+constexpr int kMaxWifi6Aps = kResultCapacity;
+
+struct Wifi6ApEntry {
+  uint8_t bssid[6] = {0};
+  char ssid[33] = {0};
+  uint8_t channel = 0;
+  uint8_t generation = 4; // 4: 802.11n, 5: 802.11ac, 6: 802.11ax
+  uint8_t bssColor = 0;   // 1..63 (0 = disabled/none)
+  bool colorDisabled = false;
+  uint16_t channelWidth = 20; // 20, 40, 80, 160 MHz
+  int8_t rssi = -127;
+  uint32_t lastSeenMs = 0;
+};
+
+struct Wifi6Hit {
+  uint8_t bssid[6] = {0};
+  char ssid[33] = {0};
+  uint8_t channel = 1;
+  uint8_t generation = 4;
+  uint8_t bssColor = 0;
+  bool colorDisabled = false;
+  uint16_t channelWidth = 20;
+  int8_t rssi = -127;
+};
+
+// Deauth Forensics: Passive attack attribution, sequence anomaly, and victim profiling
+constexpr char kDeauthForensicsCsvPath[] = "/awokxdag/deauth_forensics.csv";
+constexpr uint32_t kDeauthForensicsHopMs = 200;
+constexpr uint32_t kDeauthForensicsRedrawMs = 500;
+constexpr int kMaxDeauthForensicEvents = 24;
+
+enum DeauthAttackType : uint8_t {
+  kDeauthTypeNone = 0,
+  kDeauthTypeBroadcast = 1,  // Shotgun flood to FF:FF:FF:FF:FF:FF
+  kDeauthTypeTargeted = 2,   // Targeted unicast to specific victim station
+  kDeauthTypeDisassoc = 3,   // Disassociation frame
+  kDeauthTypeAnomaly = 4     // High sequence jump / forged transmitter
+};
+
+struct DeauthHit {
+  uint8_t attackType = kDeauthTypeNone;
+  uint8_t targetMac[6] = {0};
+  uint8_t sourceMac[6] = {0};
+  uint8_t bssid[6] = {0};
+  uint16_t reasonCode = 0;
+  uint16_t seqNum = 0;
+  int16_t seqJump = 0;
+  int8_t rssi = -127;
+  uint8_t channel = 1;
+};
+
+struct DeauthForensicEvent {
+  uint32_t timestampMs = 0;
+  uint8_t attackType = kDeauthTypeNone;
+  uint8_t targetMac[6] = {0};
+  uint8_t sourceMac[6] = {0};
+  uint8_t bssid[6] = {0};
+  uint16_t reasonCode = 0;
+  uint16_t seqNum = 0;
+  int16_t seqJump = 0;
+  int8_t rssi = -127;
+  uint8_t channel = 0;
 };
 
 // Harvester: all-channel passive EAPOL/PMKID collection (no deauth).
@@ -370,6 +439,10 @@ constexpr uint16_t kGood = ILI9341_GREEN;
 constexpr uint16_t kWarn = ILI9341_YELLOW;
 constexpr uint16_t kBad = ILI9341_RED;
 
+static inline uint16_t rgb565(uint8_t r, uint8_t g, uint8_t b) {
+  return static_cast<uint16_t>(((r & 0xF8) << 8) | ((g & 0xFC) << 3) | (b >> 3));
+}
+
 // Persistent operational audit trail. Details are CSV-escaped by the writer;
 // callers must not put captured passwords or other secrets in this log.
 bool initializeFirmwareAudit();
@@ -430,7 +503,9 @@ enum class View {
   kFleetHunt,
   kTopologyMap,
   kBleIntel,
-  kSpectrogram
+  kSpectrogram,
+  kWifi6Intel,
+  kDeauthForensics
 };
 
 // ---- Link Mode (ESP-NOW pairing of two AxD units) -----------------------
@@ -440,6 +515,14 @@ enum class View {
 // The wire format (LinkPacket, magic, keys, msg types, command opcodes) lives in
 // link_protocol.h so the headless bridge chip shares it verbatim.
 #include "link_protocol.h"
+void linkStreamFileReliable(uint8_t index, uint32_t token);
+void linkReceiveFileAck(uint32_t token, uint32_t seq);
+bool linkReliableFileActive();
+#ifdef AWOK_HEADLESS
+void bridgeQueueFileChunk(const AxdFileChunkMsg& chunk);
+void bridgeServiceFileTransfer();
+bool bridgeFileTransferActive();
+#endif
 constexpr uint32_t kLinkRendezvousMs = 1000;  // beat period (live feel)
 constexpr uint32_t kLinkWindowMs = 300;       // link-channel dwell per beat
 constexpr uint32_t kLinkHelloIntervalMs = 250;
@@ -845,6 +928,37 @@ void drawSpectrogram();
 void cycleSpectrogramMode();
 void handleSpectrogramBarTouch(int touchedIdx);
 bool exportSpectrogramToSd();
+void spectrogramLockStep(int dir);
+void spectrogramCycleBand();
+void spectrogramToggleHop();
+void spectrogramLockToChannel(uint8_t ch);
+
+extern int wifi6Page;
+int wifi6PageCount();
+void clearWifi6Intel();
+void startWifi6Intel();
+void stopWifi6Intel();
+void updateWifi6Intel();
+void drawWifi6Intel();
+bool exportWifi6IntelToSd();
+void wifi6ProcessHit(const Wifi6Hit& hit);
+
+extern int deauthForensicsPage;
+int deauthForensicsPageCount();
+void clearDeauthForensics();
+void startDeauthForensics();
+void stopDeauthForensics();
+void updateDeauthForensics();
+void drawDeauthForensics();
+bool exportDeauthForensicsToSd();
+void deauthProcessHit(const DeauthHit& hit);
+
+void openFilesManager();
+bool scanSdFiles();
+void linkStreamFileList();
+void linkStreamFileData(uint8_t index);
+void linkDeleteFile(uint8_t index);
+void linkAbortFileStream();
 
 // Network Tools types precede Arduino-generated function prototypes.
 enum class NetJob { None, Join, Hosts, Ports, Cameras, Printers, Sip, Upnp };

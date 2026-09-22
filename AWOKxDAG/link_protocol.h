@@ -28,7 +28,7 @@ enum LinkMsgType : uint8_t {
   kLinkMsgTelem = 3,       // running counts + channel + session id (status back)
   kLinkMsgCommand = 4,     // bridge -> screen: run a tool (opcode in `reserved`)
   kLinkMsgWifiResult = 5,  // screen -> bridge: one scanned AP (AxdWifiResult)
-  kLinkMsgBleResult = 14,
+  kLinkMsgBleResult = 20,
   // Fleet Wardrive (N linked nodes splitting the channel plan into one CSV):
   kLinkMsgFleetInvite = 6,    // coordinator -> all: join my session (LinkPacket)
   kLinkMsgFleetJoin = 7,      // member -> coordinator: joining (caps in flags)
@@ -38,7 +38,21 @@ enum LinkMsgType : uint8_t {
   kLinkMsgFleetHuntObservation = 11,  // member -> coordinator: target hunt observation
   kLinkMsgFleetHuntResult = 12,       // coordinator/screen -> bridge: hunt solution
   kLinkMsgFleetTopology = 13,         // swarm node -> coordinator: client/AP/probe link
+  kLinkMsgFileEntry = 14,             // screen -> bridge: one file listing entry
+  kLinkMsgFileData = 15,              // screen -> bridge: one chunk of file payload
+  kLinkMsgFileDone = 16,              // screen -> bridge: file operation complete / status
+  kLinkMsgFileChunk = 18,             // reliable file data/completion (browser ACK)
+  kLinkMsgFileChunkAck = 19,          // browser -> bridge -> screen
+  kLinkMsgFileReady = 17,             // request/ACK: bridge is parked for file replies
 };
+
+// File commands from a supporting bridge wait for its receiver-ready ACK.
+// sessionId carries a fresh nonce; existing unflagged commands keep their behavior.
+constexpr uint8_t kLinkCommandWaitFileReady = 0x80;
+constexpr uint8_t kLinkFileReadyRequest = 0;
+constexpr uint8_t kLinkFileReadyAck = 1;
+constexpr uint32_t kLinkFileReadyTimeoutMs = 2000;
+constexpr uint32_t kLinkFileReadyRetryMs = 30;
 
 // One ESP-NOW frame. POD, 36 bytes on every supported ABI, copied verbatim.
 // Command frames reuse `reserved` (low byte = AxdCommand opcode, high byte =
@@ -197,7 +211,69 @@ enum AxdSource : uint8_t {
   kSourceTopo = 4,      // results char carries a Topology Map text row
   kSourceBleIntel = 5,  // results char carries a BLE Intel telemetry row
   kSourceSpectrogram = 6, // results char carries a Spectrogram telemetry row
+  kSourceWifi6Intel = 7,  // results char carries a Wi-Fi 6 Intel telemetry row
+  kSourceDeauthForensics = 8, // results char carries a Deauth Forensics telemetry row
+  kSourceFiles = 9,           // results char carries SD file manager telemetry/data
 };
+
+// SD File Manager entry frame (ESP-NOW screen -> bridge)
+struct AxdFileEntryMsg {
+  uint32_t magic = kLinkMagic;
+  uint8_t version = kLinkProtoVersion;
+  uint8_t type = kLinkMsgFileEntry;
+  uint8_t index = 0;
+  uint8_t count = 0;
+  uint32_t size = 0;
+  char name[36] = {0};
+};
+
+// SD File Manager chunk data frame (ESP-NOW screen -> bridge)
+struct AxdFileDataMsg {
+  uint32_t magic = kLinkMagic;
+  uint8_t version = kLinkProtoVersion;
+  uint8_t type = kLinkMsgFileData;
+  uint16_t chunkSeq = 0;
+  uint16_t totalChunks = 0;
+  uint8_t dataLen = 0;
+  uint8_t pad = 0;
+  char data[136] = {0};       // Base64 chunk string
+};
+
+// SD File Manager status/completion frame (ESP-NOW screen -> bridge)
+struct AxdFileDoneMsg {
+  uint32_t magic = kLinkMagic;
+  uint8_t version = kLinkProtoVersion;
+  uint8_t type = kLinkMsgFileDone;
+  uint8_t status = 0;         // 0 = OK, 1 = Error, 2 = Aborted
+  uint32_t totalBytes = 0;
+  char name[36] = {0};
+};
+
+// One chunk in flight, retried until the browser acknowledges token + sequence.
+// 32-bit sequences avoid the legacy 65535-chunk (~6 MB) size limit.
+constexpr uint32_t kFileChunkBytes = 96;
+constexpr uint32_t kFileChunkRetryMs = 750;
+constexpr int kFileChunkAttempts = 10;
+struct AxdFileChunkMsg {
+  uint32_t magic = kLinkMagic;
+  uint8_t version = kLinkProtoVersion;
+  uint8_t type = kLinkMsgFileChunk;
+  uint8_t kind = 0;  // 0 = base64 data, 1 = completion/name, 2 = error
+  uint8_t pad = 0;
+  uint32_t token = 0;
+  uint32_t seq = 0;
+  uint32_t totalBytes = 0;
+  char data[136] = {};
+};
+struct AxdFileChunkAck {
+  uint32_t magic = kLinkMagic;
+  uint8_t version = kLinkProtoVersion;
+  uint8_t type = kLinkMsgFileChunkAck;
+  uint16_t pad = 0;
+  uint32_t token = 0;
+  uint32_t seq = 0;
+};
+static_assert(sizeof(AxdFileChunkMsg) <= 250, "File chunk must fit ESP-NOW");
 
 // Multi-node Fleet Hunter observation frame (ESP-NOW)
 struct FleetHuntObservation {
@@ -292,9 +368,17 @@ enum AxdCommand : uint8_t {
   kAxdCmdTopology = 56,     // live swarm mesh topology mapping
   kAxdCmdBleIntel = 57,     // BLE ecosystem intel & continuity decoder
   kAxdCmdSpectrogram = 58,  // dual-band RF spectrogram & waterfall analyzer
+  kAxdCmdWifi6Intel = 59,   // Wi-Fi 6 / 802.11ax OFDMA & BSS color intelligence
   // Fleet Wardrive control (multi-node; joining is always deliberate).
   kAxdCmdFleetStart = 60,   // become coordinator + start the fleet wardrive
   kAxdCmdFleetJoin = 61,    // arm this chip to auto-join a coordinator's fleet
   kAxdCmdFleetStop = 62,    // leave the fleet (coordinator ends it for everyone)
+  kAxdCmdDeauthForensics = 63, // targeted deauth & disassociation forensic analyzer
+  kAxdCmdFileList = 64,        // stream list of files in /awokxdag to phone/PC
+  kAxdCmdFileGet = 65,         // download file by index (arg = index)
+  kAxdCmdFileDelete = 66,      // delete file by index (arg = index)
+  kAxdCmdFileAbort = 67,       // cancel active file streaming
+  kAxdCmdFileGetReliable = 68, // BLE: opcode, index, target, LE uint32 request token
+  kAxdCmdFileChunkAck = 69,    // BLE write: opcode + LE uint32 token + LE uint32 seq
   kAxdCmdStopHome = 255,
 };

@@ -225,9 +225,9 @@ void spectrogramRecordDwell() {
     specPeakHold[idx] = (uint8_t)lvl;
   }
 
-  // Stream telemetry line: $SPEC,ch,dutyPct,pkts,peakRssi,noise,mgmt,ctrl,data
-  char telem[96];
-  snprintf(telem, sizeof(telem), "$SPEC,%u,%u,%u,%d,%d,%u,%u,%u",
+  // Stream telemetry line: $SPEC,ch,dutyPct,pkts,peakRssi,noise,mgmt,ctrl,data,mode
+  char telem[112];
+  snprintf(telem, sizeof(telem), "$SPEC,%u,%u,%u,%d,%d,%u,%u,%u,%u",
            specCurrentChannel,
            duty,
            dwellFrames,
@@ -235,7 +235,8 @@ void spectrogramRecordDwell() {
            avgNoise,
            dwellMgmt,
            dwellCtrl,
-           dwellData);
+           dwellData,
+           static_cast<uint8_t>(specMode));
   Serial.println(telem);
 #ifdef AWOK_HEADLESS
   bridgeNotifyResult(kSourceSpectrogram, reinterpret_cast<const uint8_t*>(telem), strlen(telem));
@@ -503,6 +504,13 @@ void spectrogramLockStep(int dir) {
   if (idx < 0) idx = 0;
   idx = (idx + dir + total) % total;
   spectrogramLockToIndex(idx);
+}
+
+void spectrogramLockToChannel(uint8_t ch) {
+  int idx = specChannelToIndex(ch);
+  if (idx >= 0) {
+    spectrogramLockToIndex(idx);
+  }
 }
 
 void spectrogramToggleHop() {

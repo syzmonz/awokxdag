@@ -8,6 +8,7 @@
 // Telemetry/results from the bridge's own tools notify the phone directly; those
 // relayed back from the white chip arrive over ESP-NOW and are forwarded too.
 #ifdef AWOK_HEADLESS
+#include <atomic>
 
 static const char* kBridgeSvcUuid     = "a0d10000-1234-4a3c-8b21-000000000001";
 static const char* kBridgeCmdUuid     = "a0d10000-1234-4a3c-8b21-000000000002";  // write
@@ -17,6 +18,7 @@ static const char* kBridgeResultsUuid = "a0d10000-1234-4a3c-8b21-000000000004"; 
 NimBLECharacteristic* g_bridgeStatus = nullptr;
 NimBLECharacteristic* g_bridgeResults = nullptr;
 volatile bool g_bridgePhoneConnected = false;
+static std::atomic<uint16_t> g_bridgeMtu{23};
 
 // Relay a command to the white chip over ESP-NOW. The screen chip parks on the
 // rendezvous channel when idle and hops across the plan while a tool runs, so:
@@ -34,14 +36,90 @@ static const uint8_t kBridgeSweeps = 2;       // fallback full-plan passes
 static const uint32_t kBridgeChanDwellMs = 2; // per-channel dwell in a sweep
 static uint16_t g_bridgeSeq = 0;
 
-static void bridgeRelayToScreen(uint8_t op, uint8_t arg) {
+// Zero throughout the command burst/sweep. Only publish the nonce once the
+// receiver is back on the rendezvous channel, so early file data cannot be lost.
+static std::atomic<uint32_t> g_bridgeFileReadyToken{0};
+
+static std::atomic<bool> g_bridgeReliableFile{false};
+static std::atomic<uint32_t> g_bridgeFileActivityMs{0}, g_bridgeFileDoneSeq{0};
+// Single producer (Wi-Fi callback), single consumer (Arduino main loop).
+static AxdFileChunkMsg g_bridgeFileQueue[4];
+static std::atomic<unsigned> g_bridgeFileHead{0}, g_bridgeFileTail{0};
+
+bool bridgeFileTransferActive() {
+  return g_bridgeReliableFile.load() && g_bridgePhoneConnected &&
+         millis() - g_bridgeFileActivityMs.load() < 12000;
+}
+
+void bridgeQueueFileChunk(const AxdFileChunkMsg& chunk) {
+  if (!g_bridgeReliableFile.load() || chunk.token != g_bridgeFileReadyToken.load() ||
+      chunk.token == 0 || chunk.kind > 2 || chunk.seq == 0) return;
+  const unsigned head = g_bridgeFileHead.load();
+  const unsigned next = (head + 1) % 4;
+  if (next == g_bridgeFileTail.load()) return;  // sender will retry; never ACK here
+  g_bridgeFileQueue[head] = chunk;
+  g_bridgeFileQueue[head].data[sizeof(chunk.data) - 1] = 0;
+  g_bridgeFileHead.store(next);
+  g_bridgeFileActivityMs.store(millis());
+}
+
+void bridgeServiceFileTransfer() {
+  const unsigned tail = g_bridgeFileTail.load();
+  if (tail == g_bridgeFileHead.load()) return;
+  const AxdFileChunkMsg chunk = g_bridgeFileQueue[tail];
+  g_bridgeFileTail.store((tail + 1) % 4);
+  if (chunk.token != g_bridgeFileReadyToken.load() || !g_bridgePhoneConnected) return;
+  if (chunk.kind != 0) g_bridgeFileDoneSeq.store(chunk.seq);
+  char line[220];
+  snprintf(line, sizeof(line), "$FILECHUNK,%lu,%lu,%lu,%u,%s",
+           static_cast<unsigned long>(chunk.token), static_cast<unsigned long>(chunk.seq),
+           static_cast<unsigned long>(chunk.totalBytes), chunk.kind, chunk.data);
+  // BLE work is deliberately outside the Wi-Fi receive callback. The screen
+  // retries if this notification is dropped or the browser cannot acknowledge.
+  if (!bridgeNotifyResult(kSourceFiles, reinterpret_cast<const uint8_t*>(line), strlen(line))) {
+    Serial.printf("[files] BLE enqueue failed: token=%lu seq=%lu bytes=%u mtu=%u\n",
+                  static_cast<unsigned long>(chunk.token), static_cast<unsigned long>(chunk.seq),
+                  static_cast<unsigned>(strlen(line) + 1), g_bridgeMtu.load());
+  }
+}
+
+static void bridgeAckFileChunk(const uint8_t* data, size_t len) {
+  if (len != 9) return;
+  AxdFileChunkAck ack;
+  for (int i = 0; i < 4; ++i) {
+    ack.token |= static_cast<uint32_t>(data[1 + i]) << (8 * i);
+    ack.seq |= static_cast<uint32_t>(data[5 + i]) << (8 * i);
+  }
+  if (ack.token == 0 || ack.seq == 0 || ack.token != g_bridgeFileReadyToken.load()) return;
+  g_bridgeFileActivityMs.store(millis() - (ack.seq == g_bridgeFileDoneSeq.load() ? 10000 : 0));
+  // No channel sweep for an ACK: both radios remain parked for this transfer.
+  esp_now_send(kLinkBroadcastAddr, reinterpret_cast<uint8_t*>(&ack), sizeof(ack));
+}
+
+bool bridgeFileReceiverReady(uint32_t token) {
+  return token != 0 && g_bridgePhoneConnected &&
+         g_bridgeFileReadyToken.load() == token;
+}
+
+static void bridgeRelayToScreen(uint8_t op, uint8_t arg, uint32_t fileToken) {
   if (!linkEnsureEspNow()) return;
+  g_bridgeFileReadyToken.store(0);
+  g_bridgeReliableFile.store(op == kAxdCmdFileGetReliable);
+  g_bridgeFileDoneSeq.store(0);
+  g_bridgeFileActivityMs.store(millis());
   g_bridgeSeq++;
   LinkPacket p;
   p.type = kLinkMsgCommand;
   p.code = g_bridgeSeq;
   p.reserved = static_cast<uint16_t>(op) | (static_cast<uint16_t>(arg) << 8);
   memcpy(p.srcMac, linkSelfMac, 6);
+  const bool fileReply = op == kAxdCmdFileList || op == kAxdCmdFileGet ||
+                         op == kAxdCmdFileGetReliable || op == kAxdCmdFileDelete;
+  if (fileReply) {
+    p.flags |= kLinkCommandWaitFileReady;
+    p.sessionId = op == kAxdCmdFileGetReliable ? fileToken : 0;
+    while (p.sessionId == 0) p.sessionId = esp_random();
+  }
 
   esp_wifi_set_channel(kLinkChannel, WIFI_SECOND_CHAN_NONE);
   for (uint8_t i = 0; i < kBridgeRvBurst; ++i) {
@@ -62,7 +140,8 @@ static void bridgeRelayToScreen(uint8_t op, uint8_t arg) {
     }
 #endif
   }
-  esp_wifi_set_channel(kLinkChannel, WIFI_SECOND_CHAN_NONE);  // home for telem
+  const esp_err_t parked = esp_wifi_set_channel(kLinkChannel, WIFI_SECOND_CHAN_NONE);
+  if (fileReply && parked == ESP_OK) g_bridgeFileReadyToken.store(p.sessionId);
 }
 
 // Push one status/result blob to the phone with a source tag prefixed.
@@ -73,17 +152,19 @@ void bridgeNotifyStatus(uint8_t source, const uint8_t* body, size_t len) {
   size_t n = len < sizeof(blob) - 1 ? len : sizeof(blob) - 1;
   memcpy(blob + 1, body, n);
   g_bridgeStatus->setValue(blob, n + 1);
-  g_bridgeStatus->notify();
+  g_bridgeStatus->notify(blob, n + 1);
 }
 
-void bridgeNotifyResult(uint8_t source, const uint8_t* body, size_t len) {
-  if (!g_bridgeResults || !g_bridgePhoneConnected) return;
-  uint8_t blob[1 + 180];  // fits a full WiGLE CSV row for wardrive streaming
+bool bridgeNotifyResult(uint8_t source, const uint8_t* body, size_t len) {
+  if (!g_bridgeResults || !g_bridgePhoneConnected) return false;
+  uint8_t blob[1 + 240];  // fits full WiGLE CSV row or base64 file data chunk
   blob[0] = source;
   size_t n = len < sizeof(blob) - 1 ? len : sizeof(blob) - 1;
   memcpy(blob + 1, body, n);
-  g_bridgeResults->setValue(blob, n + 1);
-  g_bridgeResults->notify();
+  // notify() with no payload only schedules a characteristic update. Another
+  // producer (Wi-Fi callback or loop) can replace that value before BLE reads it.
+  // The explicit-payload overload copies this packet into its own NimBLE mbuf.
+  return g_bridgeResults->notify(blob, n + 1);
 }
 
 // A command may kick off a multi-second blocking scan; running that (and the
@@ -93,11 +174,24 @@ void bridgeNotifyResult(uint8_t source, const uint8_t* body, size_t len) {
 // notifications, exactly like the screen chip's queue-then-process path.
 volatile uint8_t g_bridgePendOp = 0, g_bridgePendArg = 0, g_bridgePendTarget = 0;
 volatile bool g_bridgeCmdPending = false;
+volatile uint32_t g_bridgePendFileToken = 0;
 
 class BridgeCmdCallbacks : public NimBLECharacteristicCallbacks {
   void onWrite(NimBLECharacteristic* c, NimBLEConnInfo&) override {
     const NimBLEAttValue v = c->getValue();
     if (v.length() == 0) return;
+    if (v.data()[0] == kAxdCmdFileChunkAck) {
+      bridgeAckFileChunk(v.data(), v.length());
+      return;
+    }
+    g_bridgePendFileToken = 0;
+    if (v.data()[0] == kAxdCmdFileGetReliable) {
+      if (v.length() != 7) return;
+      uint32_t token = 0;
+      for (int i = 0; i < 4; ++i) token |= static_cast<uint32_t>(v.data()[3 + i]) << (8 * i);
+      if (token == 0) return;
+      g_bridgePendFileToken = token;
+    }
     g_bridgePendOp = v.data()[0];
     g_bridgePendArg = v.length() > 1 ? v.data()[1] : 0;
     g_bridgePendTarget = v.length() > 2
@@ -111,10 +205,17 @@ class BridgeCmdCallbacks : public NimBLECharacteristicCallbacks {
 void bridgeServiceCommand() {
   if (!g_bridgeCmdPending) return;
   g_bridgeCmdPending = false;
-  const uint8_t op = g_bridgePendOp, arg = g_bridgePendArg, target = g_bridgePendTarget;
+  const uint8_t op = g_bridgePendOp, arg = g_bridgePendArg;
+  const uint32_t fileToken = g_bridgePendFileToken;
+  uint8_t target = g_bridgePendTarget;
+  // SD card is physically on the Screen chip; always relay file commands to screen
+  if (op == kAxdCmdFileList || op == kAxdCmdFileGet || op == kAxdCmdFileGetReliable || op == kAxdCmdFileDelete ||
+      op == kAxdCmdFileAbort || op == kAxdCmdFiles) {
+    target = kTargetScreen;
+  }
   Serial.printf("[bridge] cmd op=%u arg=%u target=%u\n", op, arg, target);
   if (target == kTargetScreen) {
-    bridgeRelayToScreen(op, arg);
+    bridgeRelayToScreen(op, arg, fileToken);
   } else {
     linkDispatchCommand(op, arg);  // run on this chip
   }
@@ -123,11 +224,17 @@ void bridgeServiceCommand() {
 class BridgeServerCallbacks : public NimBLEServerCallbacks {
   void onConnect(NimBLEServer* s, NimBLEConnInfo& info) override {
     g_bridgePhoneConnected = true;
+    g_bridgeMtu.store(info.getMTU());
     s->updateConnParams(info.getConnHandle(), 12, 12, 0, 200);
     Serial.println("[bridge] phone connected");
   }
+  void onMTUChange(uint16_t mtu, NimBLEConnInfo&) override {
+    g_bridgeMtu.store(mtu);
+    Serial.printf("[bridge] BLE MTU=%u, notification payload=%u\n", mtu, mtu - 3);
+  }
   void onDisconnect(NimBLEServer*, NimBLEConnInfo&, int reason) override {
     g_bridgePhoneConnected = false;
+    g_bridgeFileReadyToken.store(0);
     Serial.printf("[bridge] phone disconnected (%d); re-advertising\n", reason);
     NimBLEDevice::startAdvertising();
   }
