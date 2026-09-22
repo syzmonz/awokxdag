@@ -2352,7 +2352,13 @@ function parseSpectrogramRow(rowStr) {
     const data = parseInt(p[8], 10) || 0;
     if (p.length >= 10) {
       const m = parseInt(p[9], 10);
-      if (!isNaN(m)) specBoardMode = m;
+      if (!isNaN(m)) {
+        if (m === 2 && specBoardMode !== 2) {
+          specChannels.clear();
+          specWaterfall.length = 0;
+        }
+        specBoardMode = m;
+      }
     }
 
     specCurrentActiveChannel = ch;
@@ -2381,6 +2387,7 @@ function parseSpectrogramRow(rowStr) {
 function pushWaterfallSlice() {
   const visible = getVisibleChannels();
   const row = visible.map(ch => {
+    if (specBoardMode === 2 && ch !== specCurrentActiveChannel) return 0;
     const stat = specChannels.get(ch);
     return stat ? (stat.level || 0) : 0;
   });
@@ -3512,6 +3519,8 @@ if (specCanvas) {
     const lockedCh = channels[idx];
     log(`[spectrogram] Lock to Channel ${lockedCh}`);
     specBoardMode = 2; // Locked
+    specChannels.clear();
+    specWaterfall.length = 0;
     specCurrentActiveChannel = lockedCh;
     sendOp(58, lockedCh);
     updateSpectrogramBoardHeader();
