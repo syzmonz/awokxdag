@@ -1206,7 +1206,7 @@ const OP_SELECT_WIFI = 51;
 const TARGET_OPS = [52,53,54,55,22,23];  // need a selected network
 const TGT_BRIDGE = 0, TGT_SCREEN = 1;
 let target = TGT_SCREEN;  // which chip runs the command
-const GPSSD_OPS = [42, 64, 65, 66, 67];  // Files -- screen-chip only (no SD on bridge)
+const GPSSD_OPS = [42, 64, 65, 66, 67, 68];  // Files -- screen-chip only (no SD on bridge)
 
 // Friendly tool opcode dictionary for telemetry display
 const TOOL_NAMES = {
@@ -2926,7 +2926,7 @@ function parseResult(dv, c){
   if (dv.byteLength >= 1 && dv.getUint8(0) === 9) {  // SD File Manager (text)
     let row = "";
     for (let k = 1; k < dv.byteLength; k++) row += String.fromCharCode(dv.getUint8(k));
-    parseFileMessage(row);
+    parseFileMessage(row, c);
     return;
   }
   if (dv.byteLength >= 5 && dv.getUint8(0) === 0x24 && dv.getUint8(1) === 0x48 && dv.getUint8(2) === 0x55 && dv.getUint8(3) === 0x4E && dv.getUint8(4) === 0x4E) {
@@ -2968,7 +2968,7 @@ function parseResult(dv, c){
   if (dv.byteLength >= 5 && dv.getUint8(0) === 0x24 && dv.getUint8(1) === 0x46 && dv.getUint8(2) === 0x49 && dv.getUint8(3) === 0x4C && dv.getUint8(4) === 0x45) {
     let row = "";
     for (let k = 0; k < dv.byteLength; k++) row += String.fromCharCode(dv.getUint8(k));
-    parseFileMessage(row);
+    parseFileMessage(row, c);
     return;
   }
   if (dv.byteLength < 12) return;            // [source][index][count][rssi][ch][auth][bssid6][ssid]
@@ -3397,7 +3397,7 @@ updateEnabled(); renderConns(); renderStats(); initTopoCanvas();
 async function downloadWardriveCsv(){
   if (!wardriveRows.length){ log("no wardrive rows yet"); return; }
   const header =
-    "WigleWifi-1.6,appRelease=AxD,model=ESP32,release=1.6.5,device=AxD,display=none,board=AxD Bridge,brand=AxD\n" +
+    "WigleWifi-1.6,appRelease=AxD,model=ESP32,release=1.7.0,device=AxD,display=none,board=AxD Bridge,brand=AxD\n" +
     "MAC,SSID,AuthMode,FirstSeen,Channel,Frequency,RSSI,CurrentLatitude,CurrentLongitude,AltitudeMeters,AccuracyMeters,RCOIs,MfgrId,Type\n";
   const text = header + wardriveRows.join("\n") + "\n";
   const fname = "wardrive-" + Date.now() + ".csv";
@@ -3751,6 +3751,7 @@ function renderFilesTable() {
 }
 
 function requestFileList() {
+  if (activeFileDownload) { log("Finish or abort the transfer before refreshing files"); return; }
   sdFileList = [];
   if ($("files-tbody")) {
     $("files-tbody").innerHTML = '<tr><td colspan="5" style="text-align:center; color:var(--muted); padding:24px;">Scanning /awokxdag on SD card…</td></tr>';
@@ -3766,8 +3767,10 @@ function requestFileList() {
 }
 
 function startFileDownload(index, isPreview = false) {
+  if (activeFileDownload) { log("Finish or abort the current transfer first"); return; }
   const file = sdFileList.find(f => f.index === index);
   if (!file) return;
+  if (!serialConnected && !activeConn()?.connected) { log("Connect a bridge first"); return; }
   activeFileDownload = {
     index,
     name: file.name,
@@ -3776,6 +3779,9 @@ function startFileDownload(index, isPreview = false) {
     chunks: new Map(),
     startTime: Date.now(),
     bytesReceived: 0,
+    connection: serialConnected ? null : activeConn(),
+    reliable: !serialConnected,
+    token: null,
     isPreview
   };
   if ($("file-ready-card")) $("file-ready-card").style.display = "none";
@@ -3790,13 +3796,19 @@ function startFileDownload(index, isPreview = false) {
   if (serialConnected) {
     sendSerialCommand(65, index);
   } else {
-    sendOp(65, index);
+    armFileTransferTimeout();
+    requestReliableFile(activeFileDownload);
   }
   log(`Starting download of ${file.name} (${formatBytes(file.size)})`);
 }
 
 function abortFileDownload() {
-  if (serialConnected) {
+  const connection = activeFileDownload?.connection;
+  if (activeFileDownload?.reliable && connection?.cmdCh) {
+    connection.fileAckWrites = (connection.fileAckWrites || Promise.resolve())
+      .then(() => connection.cmdCh.writeValue(new Uint8Array([67, 0, TGT_SCREEN])))
+      .catch(error => log("Abort failed: " + error.message));
+  } else if (serialConnected) {
     sendSerialCommand(67, 0);
   } else {
     sendOp(67, 0);
@@ -3806,6 +3818,7 @@ function abortFileDownload() {
 }
 
 function deleteFileRemote(index) {
+  if (activeFileDownload) { log("Finish or abort the transfer before deleting files"); return; }
   if (serialConnected) {
     sendSerialCommand(66, index);
   } else {
@@ -3816,19 +3829,21 @@ function deleteFileRemote(index) {
 
 function updateDownloadProgress(seq, total) {
   if (!activeFileDownload) return;
-  const pct = Math.min(100, Math.round((seq / total) * 100));
+  const received = activeFileDownload.chunks.size;
+  const pct = Math.min(100, Math.round((received / total) * 100));
   const elapsedSec = (Date.now() - activeFileDownload.startTime) / 1000;
-  const estBytes = Math.min(activeFileDownload.size, seq * 96);
+  const estBytes = Math.min(activeFileDownload.size, received * 96);
   const speedKb = elapsedSec > 0 ? (estBytes / 1024 / elapsedSec).toFixed(1) : "0.0";
 
   if ($("file-progress-pct")) $("file-progress-pct").textContent = pct + "%";
   if ($("file-progress-bar")) $("file-progress-bar").style.width = pct + "%";
-  if ($("file-progress-detail")) $("file-progress-detail").textContent = `${formatBytes(estBytes)} / ${formatBytes(activeFileDownload.size)} (Chunk ${seq}/${total})`;
+  if ($("file-progress-detail")) $("file-progress-detail").textContent = `${formatBytes(estBytes)} / ${formatBytes(activeFileDownload.size)} (Chunks ${received}/${total})`;
   if ($("file-progress-speed")) $("file-progress-speed").textContent = `${speedKb} KB/s`;
   if ($("files-stat-rate")) $("files-stat-rate").textContent = `${speedKb} KB/s`;
 }
 
 function resetDownloadProgress() {
+  if (activeFileDownload?.timeout) clearTimeout(activeFileDownload.timeout);
   activeFileDownload = null;
   if ($("file-progress-card")) $("file-progress-card").style.display = "none";
   if ($("files-abort-btn")) $("files-abort-btn").style.display = "none";
@@ -3922,24 +3937,44 @@ async function copyReadyFileText() {
 
 function finishFileDownload(name, size) {
   if (!activeFileDownload) return;
-  const total = activeFileDownload.totalChunks;
-  let byteArrays = [];
+  // Missing early ESP-NOW/BLE chunks used to be silently skipped, producing
+  // "successful" CSV downloads with no WiGLE metadata or column header.
+  const fail = reason => {
+    log(`File download failed: ${name}: ${reason}. Retry the download.`);
+    resetDownloadProgress();
+    alert(`Incomplete file: ${name}. ${reason}. Please retry the download.`);
+  };
+  if (name !== activeFileDownload.name || !Number.isSafeInteger(size) || size < 0) {
+    fail("File completion did not match the requested transfer");
+    return;
+  }
+  const total = Math.ceil(size / 96) || 1;
+  if (activeFileDownload.totalChunks !== total) {
+    fail("Chunk count does not match the file size");
+    return;
+  }
+  const byteArrays = [];
   let totalBytes = 0;
   for (let i = 1; i <= total; i++) {
-    const b64 = activeFileDownload.chunks.get(i) || "";
-    if (b64.length) {
-      try {
-        const binaryString = atob(b64);
-        const len = binaryString.length;
-        const bytes = new Uint8Array(len);
-        for (let j = 0; j < len; j++) {
-          bytes[j] = binaryString.charCodeAt(j);
-        }
-        byteArrays.push(bytes);
-        totalBytes += len;
-      } catch(e) {
-        log("Base64 decode chunk error: " + e.message);
+    if (!activeFileDownload.chunks.has(i)) {
+      fail(`Missing chunk ${i} of ${total}`);
+      return;
+    }
+    try {
+      const binaryString = atob(activeFileDownload.chunks.get(i));
+      const len = binaryString.length;
+      const expected = Math.min(96, size - (i - 1) * 96);
+      if (len !== expected) {
+        fail(`Chunk ${i} has ${len} bytes; expected ${expected}`);
+        return;
       }
+      const bytes = new Uint8Array(len);
+      for (let j = 0; j < len; j++) bytes[j] = binaryString.charCodeAt(j);
+      byteArrays.push(bytes);
+      totalBytes += len;
+    } catch(e) {
+      fail(`Invalid data in chunk ${i}`);
+      return;
     }
   }
   const fileInfo = getFileTypeInfo(name);
@@ -4009,7 +4044,107 @@ async function displayFilePreview(name, blob) {
   }
 }
 
-function parseFileMessage(msg) {
+// Browser acknowledgments cover both the ESP-NOW and BLE legs of a transfer.
+// Retain the most recent completion so its ACK can be resent after UI cleanup.
+let lastReliableFile = null;
+
+function armFileTransferTimeout() {
+  const transfer = activeFileDownload;
+  if (!transfer?.reliable) return;
+  if (transfer.timeout) clearTimeout(transfer.timeout);
+  transfer.timeout = setTimeout(() => {
+    if (activeFileDownload !== transfer) return;
+    const received = transfer.chunks.size;
+    log(`Bluetooth ACK transfer stalled: token=${transfer.token}, received=${received}/${transfer.totalChunks}, bytes=${transfer.size}`);
+    resetDownloadProgress();
+    alert(`Bluetooth transfer stalled after ${received} of ${transfer.totalChunks} chunks. See the transfer log for details.`);
+  }, 12000);
+}
+
+function requestReliableFile(transfer) {
+  const token = new Uint32Array(1);
+  do { crypto.getRandomValues(token); } while (!token[0]);
+  transfer.token = token[0];
+  const bytes = new Uint8Array(7);
+  bytes.set([68, transfer.index, TGT_SCREEN]);
+  new DataView(bytes.buffer).setUint32(3, transfer.token, true);
+  const connection = transfer.connection;
+  connection.fileAckWrites = (connection.fileAckWrites || Promise.resolve())
+    .then(() => connection.cmdCh.writeValue(bytes))
+    .catch(error => {
+      if (activeFileDownload === transfer) resetDownloadProgress();
+      log("File request failed: " + error.message);
+    });
+}
+
+function acknowledgeFileChunk(connection, token, seq) {
+  if (!connection?.connected || !connection.cmdCh) return;
+  const bytes = new Uint8Array(9);
+  const view = new DataView(bytes.buffer);
+  bytes[0] = 69;
+  view.setUint32(1, token, true);
+  view.setUint32(5, seq, true);
+  // Serialize ACK writes on the originating bridge, even if the user changes
+  // the selected bridge while this download is running.
+  connection.fileAckWrites = (connection.fileAckWrites || Promise.resolve())
+    .then(() => connection.cmdCh.writeValue(bytes))
+    .catch(error => log("File ACK will retry with the chunk: " + error.message));
+}
+
+function parseReliableFileChunk(msg, connection) {
+  const parts = msg.split(",");
+  if (parts.length < 6) return;
+  const token = Number(parts[1]), seq = Number(parts[2]);
+  const size = Number(parts[3]), kind = Number(parts[4]);
+  const data = parts.slice(5).join(",");
+  if (![token, seq, size].every(n => Number.isInteger(n) && n >= 0 && n <= 0xffffffff) ||
+      !token || !seq || ![0, 1, 2].includes(kind)) return;
+  if (lastReliableFile?.connection === connection && lastReliableFile.token === token &&
+      lastReliableFile.seq === seq && lastReliableFile.kind === kind && kind !== 0) {
+    acknowledgeFileChunk(connection, token, seq);
+    return;
+  }
+  const transfer = activeFileDownload;
+  if (!transfer?.reliable || transfer.connection !== connection) return;
+  if (transfer.token !== token) return;
+  if (transfer.snapshotSize == null) {
+    if (kind !== 2 && (kind !== 0 || seq !== 1)) return;
+    transfer.snapshotSize = size;
+    transfer.size = size; // current snapshot, not a possibly stale directory listing
+    transfer.totalChunks = Math.ceil(size / 96) || 1;
+    log(`Bluetooth ACK transfer confirmed: token=${token}, bytes=${size}, chunks=${transfer.totalChunks}`);
+  }
+  if (transfer.size !== size) return;
+  const total = transfer.totalChunks;
+  if (kind === 0) {
+    if (seq > total) return;
+    try {
+      if (atob(data).length !== Math.min(96, size - (seq - 1) * 96)) return;
+    } catch { return; }
+    if (transfer.chunks.has(seq) && transfer.chunks.get(seq) !== data) return;
+    transfer.chunks.set(seq, data);
+    updateDownloadProgress(seq, total);
+    armFileTransferTimeout();
+    acknowledgeFileChunk(connection, token, seq);
+    return;
+  }
+  if (kind === 1 && (seq !== total + 1 || transfer.chunks.size !== total || data !== transfer.name)) return;
+  lastReliableFile = {connection, token, seq, kind};
+  acknowledgeFileChunk(connection, token, seq);
+  if (kind === 2) {
+    resetDownloadProgress();
+    alert("File transfer failed: " + data);
+  } else {
+    finishFileDownload(data, size);
+  }
+}
+
+function parseFileMessage(msg, connection = null) {
+  if (activeFileDownload?.reliable && connection !== activeFileDownload.connection) return;
+  if (msg.startsWith("$FILECHUNK,")) {
+    parseReliableFileChunk(msg, connection);
+    return;
+  }
   if (msg.startsWith("$FILELIST_END,")) {
     const parts = msg.split(",");
     const count = parseInt(parts[1], 10) || sdFileList.length;
@@ -4039,6 +4174,7 @@ function parseFileMessage(msg) {
     return;
   }
   if (msg.startsWith("$FILEDATA,")) {
+    if (activeFileDownload?.reliable) return;
     const parts = msg.split(",");
     if (parts.length >= 4) {
       const seq = parseInt(parts[1], 10);
@@ -4053,6 +4189,7 @@ function parseFileMessage(msg) {
     return;
   }
   if (msg.startsWith("$FILEDONE,")) {
+    if (activeFileDownload?.reliable) return;
     const parts = msg.split(",");
     const name = parts[1] || (activeFileDownload ? activeFileDownload.name : "file");
     const size = parseInt(parts[2], 10) || 0;
