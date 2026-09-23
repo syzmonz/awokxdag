@@ -41,11 +41,8 @@ int topoSlotFor(const uint8_t* bssid) {
 int topoSinT(int i) { return kTopoSin[((i % 24) + 24) % 24]; }
 int topoCosT(int i) { return kTopoSin[(((i + 6) % 24) + 24) % 24]; }
 
-uint16_t topoColor(int rssi) {
-  int v = rssi;
-  if (v < -90) v = -90;
-  if (v > -30) v = -30;
-  int lvl = (v + 90) * 100 / 60;
+uint16_t topoColor(int rssi, int minR, int span) {
+  int lvl = (rssi - minR) * 100 / span;
   if (lvl < 0) lvl = 0;
   if (lvl > 100) lvl = 100;
   return kTopoPal[lvl];
@@ -93,6 +90,18 @@ void drawTopologyGraphBody() {
     }
   }
 
+  int minR = -127;
+  int maxR = -127;
+  bool anyR = false;
+  for (int k = 0; k < n; ++k) {
+    if (topoFreshPct(now, topoAps[order[k]].lastSeenMs) <= 0) continue;
+    int r = topoAps[order[k]].rssi;
+    if (!anyR) { minR = r; maxR = r; anyR = true; }
+    else { if (r < minR) minR = r; if (r > maxR) maxR = r; }
+  }
+  int span = maxR - minR;
+  if (span < 20) span = 20;
+
   int shown = 0;
   const int kMaxNodes = 8;
 
@@ -103,16 +112,16 @@ void drawTopologyGraphBody() {
 
     int idxAP = (kTopoStartIdx + topoSlotFor(ap.bssid) * 2) % 24;
     int rssi = ap.rssi;
-    if (rssi < -90) rssi = -90;
-    if (rssi > -40) rssi = -40;
-    int rr = 46 + (-40 - rssi);
+    if (rssi < -88) rssi = -88;
+    if (rssi > -32) rssi = -32;
+    int rr = 32 + (-32 - rssi) * 80 / 56;
 
     int ax = cx + (topoCosT(idxAP) * rr) / 256;
     int ay = cy + (topoSinT(idxAP) * rr) / 256;
     if (ay < cyTop + 12) ay = cyTop + 12;
     if (ay > cyBot - 14) ay = cyBot - 14;
 
-    uint16_t heat = topoDim(topoColor(ap.rssi), pct);
+    uint16_t heat = topoDim(topoColor(ap.rssi, minR, span), pct);
     display.drawLine(cx, cy, ax, ay, heat);
 
     int drawn = 0;
@@ -126,7 +135,7 @@ void drawTopologyGraphBody() {
       int cyy = ay + (topoSinT(cidx) * 14) / 256;
       if (cyy < cyTop + 3) cyy = cyTop + 3;
       if (cyy > cyBot - 3) cyy = cyBot - 3;
-      uint16_t chc = topoDim(topoColor(topoClients[c].rssi), cpct);
+      uint16_t chc = topoDim(topoColor(topoClients[c].rssi, minR, span), cpct);
       display.drawLine(ax, ay, cxx, cyy, chc);
       display.fillCircle(cxx, cyy, 2, chc);
       ++drawn;
@@ -139,11 +148,21 @@ void drawTopologyGraphBody() {
     String label = ap.ssid[0] ? clipped(ap.ssid, 7)
                               : String(ap.bssid[4], HEX) + String(ap.bssid[5], HEX);
     int lw = label.length() * 6;
-    int lx = ax - lw / 2;
+    int dxc = ax - cx;
+    if (dxc < 0) dxc = -dxc;
+    int lx;
+    int ly;
+    if (dxc <= 20) {
+      lx = ax - lw / 2;
+      ly = (ay < cy) ? (ay - nodeR - 10) : (ay + nodeR + 2);
+    } else {
+      ly = ay - 3;
+      lx = (ax < cx) ? (ax - nodeR - lw - 1) : (ax + nodeR + 1);
+    }
+    if (ly < cyTop + 1) ly = ay + nodeR + 2;
+    if (ly > cyBot - 9) ly = ay - nodeR - 10;
     if (lx < 1) lx = 1;
     if (lx + lw > kScreenWidth - 1) lx = kScreenWidth - 1 - lw;
-    int ly = ay + nodeR + 2;
-    if (ly > cyBot - 9) ly = ay - nodeR - 10;
     display.setTextColor(topoDim(ap.isOpen ? kWarn : kForeground, pct), kBackground);
     display.setCursor(lx, ly);
     display.print(label);
