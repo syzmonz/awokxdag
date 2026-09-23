@@ -6,13 +6,11 @@
 // parameters across 2.4 GHz and 5 GHz bands without transmitting.
 // Emits $AXINTEL telemetry over BLE/Serial and exports to SD.
 
-Wifi6ApEntry wifi6Aps[kMaxWifi6Aps];
+ToolBuffer<Wifi6ApEntry, kMaxWifi6Aps> wifi6Aps;
 int wifi6ApCount = 0;
 
 static constexpr int kWifi6QueueSlots = AwokPins::kDualBand ? 32 : 16;
-static Wifi6Hit wifi6Queue[kWifi6QueueSlots];
-static volatile int wifi6QueueHead = 0;
-static volatile int wifi6QueueTail = 0;
+static ToolQueue<Wifi6Hit, kWifi6QueueSlots> wifi6Queue;
 
 int wifi6HopIndex = 0;
 uint32_t lastWifi6HopMs = 0;
@@ -66,7 +64,8 @@ static uint8_t wifi6HopChannelAt(int idx) {
 }
 
 void IRAM_ATTR wifi6PromiscuousCallback(void* buf, wifi_promiscuous_pkt_type_t type) {
-  if (type != WIFI_PKT_MGMT) return;
+  const uint32_t generation = wifi6Queue.generation();
+  if (!generation || type != WIFI_PKT_MGMT) return;
   const wifi_promiscuous_pkt_t* packet =
       static_cast<const wifi_promiscuous_pkt_t*>(buf);
   const uint8_t* payload = packet->payload;
@@ -77,10 +76,7 @@ void IRAM_ATTR wifi6PromiscuousCallback(void* buf, wifi_promiscuous_pkt_type_t t
   // Filter for Beacon (0x80) or Probe Response (0x50)
   if ((frameControl & 0xF0) != 0x80 && (frameControl & 0xF0) != 0x50) return;
 
-  const int nextHead = (wifi6QueueHead + 1) % kWifi6QueueSlots;
-  if (nextHead == wifi6QueueTail) return; // Queue full
-
-  Wifi6Hit& hit = wifi6Queue[wifi6QueueHead];
+  Wifi6Hit hit = {};
   memcpy(hit.bssid, payload + 16, 6);
   hit.rssi = packet->rx_ctrl.rssi;
   hit.channel = packet->rx_ctrl.channel;
@@ -141,7 +137,7 @@ void IRAM_ATTR wifi6PromiscuousCallback(void* buf, wifi_promiscuous_pkt_type_t t
     offset += 2 + elen;
   }
 
-  wifi6QueueHead = nextHead;
+  wifi6Queue.push(hit, generation);
 }
 
 static void wifi6StreamTelemetry(const Wifi6ApEntry& ap) {
@@ -206,6 +202,7 @@ void wifi6ProcessHit(const Wifi6Hit& hit) {
 }
 
 bool exportWifi6IntelToSd() {
+  if (!wifi6Aps) return lastWifi6IntelCsvOk;
   if (!ensureSdCard()) return false;
   const String temporaryPath = String(kWifi6IntelCsvPath) + ".tmp";
   SD.remove(temporaryPath.c_str());
@@ -401,9 +398,13 @@ void startWifi6Intel() {
   stopActiveTools();
   if (!ensureWifiStation(true)) return;
 
+  if (!wifi6Aps.allocate() || !wifi6Queue.begin()) {
+    wifi6Queue.release();
+    wifi6Aps.release();
+    showToolMemoryError("Wi-Fi 6 Intel");
+    return;
+  }
   wifi6ApCount = 0;
-  wifi6QueueHead = 0;
-  wifi6QueueTail = 0;
   wifi6HopIndex = 0;
   lastWifi6HopMs = millis();
   lastWifi6DrawMs = 0;
@@ -422,10 +423,18 @@ void startWifi6Intel() {
 }
 
 void stopWifi6Intel() {
+  if (!wifi6IntelActive) return;
   wifi6IntelActive = false;
+  wifi6Queue.pause();
   esp_wifi_set_promiscuous(false);
   esp_wifi_set_promiscuous_rx_cb(nullptr);
+  Wifi6Hit hit;
+  while (wifi6Queue.pop(hit)) wifi6ProcessHit(hit);
   lastWifi6IntelCsvOk = exportWifi6IntelToSd();
+  wifi6Queue.release();
+  wifi6Aps.release();
+  wifi6ApCount = 0;
+  logMemory("Wi-Fi 6 buffers released");
   Serial.println("[wifi6] stopped");
 }
 
@@ -435,11 +444,8 @@ void updateWifi6Intel() {
   const uint32_t now = millis();
 
   // Drain queue
-  while (wifi6QueueTail != wifi6QueueHead) {
-    const Wifi6Hit hit = wifi6Queue[wifi6QueueTail];
-    wifi6QueueTail = (wifi6QueueTail + 1) % kWifi6QueueSlots;
-    wifi6ProcessHit(hit);
-  }
+  Wifi6Hit hit;
+  while (wifi6Queue.pop(hit)) wifi6ProcessHit(hit);
 
   // Channel hopping
   if (now - lastWifi6HopMs >= kWifi6HopIntervalMs) {

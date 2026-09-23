@@ -100,7 +100,8 @@ void handleTouch() {
   }
   if (!consumeTouchPress(pressed, millis())) return;
   noteActivity();
-  Serial.printf("[touch] x=%d y=%d\n", x, y);
+  // Keyboard coordinates can reveal password characters even when masked.
+  if (currentView != View::kNetworkEdit) Serial.printf("[touch] x=%d y=%d\n", x, y);
   if (currentView == View::kScreenTest) {
     handleScreenTestTouch(x, y);
     return;

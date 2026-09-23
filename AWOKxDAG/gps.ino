@@ -22,6 +22,46 @@ uint32_t gpsBaudBaselinePassed = 0;
 bool gpsClockSynced = false;
 uint32_t gpsLastClockSyncMs = 0;
 
+// Store the zone name, not its table index (indices can change on data updates).
+int gpsLocalZone = -1;
+bool gpsZoneLookedUp = false;
+uint32_t gpsLastZoneLookupMs = 0;
+int gpsAppliedOffset = 32767;
+char gpsPosixZone[24] = "UTC0";
+
+const char* gpsClockTimezone() { return gpsPosixZone; }
+
+static void updateGpsTimezone() {
+  const uint32_t nowMs = millis();
+  if (gps.location.isValid() && gps.location.age() < 5000 &&
+      (!gpsZoneLookedUp || nowMs - gpsLastZoneLookupMs >= 30000)) {
+    gpsZoneLookedUp = true;
+    gpsLastZoneLookupMs = nowMs;
+    const int zone = AwokTime::zoneAt(gps.location.lat(), gps.location.lng());
+    if (zone >= 0 && zone != gpsLocalZone) {
+      gpsLocalZone = zone;
+      Preferences preferences;
+      if (preferences.begin("awok-tz", false)) {
+        preferences.putString("zone", AwokTime::kZones[zone].name);
+        preferences.end();
+      }
+      Serial.printf("[gps] local timezone: %s\n", AwokTime::kZones[zone].name);
+    }
+  }
+  int minutes = 0;
+  bool dst = false;
+  if (!AwokTime::offsetAt(gpsLocalZone, int64_t(time(nullptr)), minutes, dst) ||
+      minutes == gpsAppliedOffset) return;
+  // libc/FAT uses the current local offset, while epoch seconds stay absolute
+  // for TLS/NTP. Re-evaluated each loop, including at DST transitions without GPS.
+  const int absolute = abs(minutes);
+  snprintf(gpsPosixZone, sizeof(gpsPosixZone), "LOC%s%d:%02d",
+           minutes >= 0 ? "-" : "+", absolute / 60, absolute % 60);
+  setenv("TZ", gpsPosixZone, 1);
+  tzset();
+  gpsAppliedOffset = minutes;
+}
+
 // Convert a validated Gregorian UTC date to Unix seconds without mktime(),
 // whose result depends on the process timezone. All supported GPS years are
 // positive, so this era decomposition is identical on both ESP32 toolchains.
@@ -90,9 +130,7 @@ static void syncSystemClockFromGps() {
                          static_cast<long long>(oldEpoch);
   if (correction < 0) correction = -correction;
   if (oldEpoch < 1577836800 || correction > 2) {
-    Serial.printf("[gps] system UTC set to %04d-%02d-%02d %02d:%02d:%02d\n",
-                  year, gps.date.month(), gps.date.day(), gps.time.hour(),
-                  gps.time.minute(), gps.time.second());
+    Serial.println("[gps] clock synchronized from GPS");
   }
 }
 
@@ -118,6 +156,12 @@ void applyGpsBaud(unsigned long baud, bool persist) {
 }
 
 void initGps() {
+  Preferences preferences;
+  if (preferences.begin("awok-tz", true)) {
+    const String saved = preferences.getString("zone", "");
+    gpsLocalZone = AwokTime::zoneByName(saved.c_str());
+    preferences.end();
+  }
   const unsigned long baud =
       gpsBaudIsKnown(deviceSettings.gpsBaud) ? deviceSettings.gpsBaud
                                              : AwokPins::kGpsBaud;
@@ -146,6 +190,7 @@ void updateGps() {
     }
   }
   syncSystemClockFromGps();
+  updateGpsTimezone();
 }
 
 bool gpsHasFix() {
@@ -171,29 +216,39 @@ String gpsCsvFields() {
   return out;
 }
 
-// "yyyy-MM-dd HH:mm:ss" UTC for logs and WiGLE FirstSeen. Fresh GPS fields are
-// preferred; once GPS or NTP has established the system clock, it keeps useful
-// timestamps through a temporary GPS outage. Only a truly unsynced boot falls
-// back to an explicit uptime marker.
+// Local calendar time for every log and WiGLE FirstSeen. GPS supplies absolute
+// time; the latest valid position chooses timezone and DST rules. Keep the last
+// zone during fix loss. Until both clock and zone are known, label uptime rather
+// than silently writing UTC as though it were local time.
+static time_t gpsTimestampEpoch() {
+  if (gpsDateTimeFreshAndSane())
+    return gpsUtcEpoch(gps.date.year(), gps.date.month(), gps.date.day(),
+                       gps.time.hour(), gps.time.minute(), gps.time.second());
+  return time(nullptr);
+}
+
 String gpsTimestamp() {
-  if (gpsDateTimeFreshAndSane()) {
+  struct tm local = {};
+  int minutes = 0;
+  bool dst = false;
+  if (AwokTime::localTime(gpsLocalZone, gpsTimestampEpoch(), local, minutes, dst)) {
     char buffer[32];
-    snprintf(buffer, sizeof(buffer), "%04d-%02d-%02d %02d:%02d:%02d",
-             gps.date.year(), gps.date.month(), gps.date.day(),
-             gps.time.hour(), gps.time.minute(), gps.time.second());
-    return String(buffer);
-  }
-  const time_t now = time(nullptr);
-  if (now > 1577836800) {
-    struct tm utc = {};
-    gmtime_r(&now, &utc);
-    char buffer[32];
-    strftime(buffer, sizeof(buffer), "%Y-%m-%d %H:%M:%S", &utc);
+    strftime(buffer, sizeof(buffer), "%Y-%m-%d %H:%M:%S", &local);
     return String(buffer);
   }
   return String("uptime+") + String(millis());
 }
 
+String gpsTimezoneLabel() {
+  int minutes = 0;
+  bool dst = false;
+  if (!AwokTime::offsetAt(gpsLocalZone, int64_t(gpsTimestampEpoch()), minutes, dst))
+    return "Local time: waiting for GPS";
+  char offset[32];
+  snprintf(offset, sizeof(offset), "GMT%c%02d:%02d %s", minutes < 0 ? '-' : '+',
+           abs(minutes) / 60, abs(minutes) % 60, dst ? "DST" : "standard");
+  return String(offset);
+}
 
 // ---- GPS status + wardriving --------------------------------------------
 
@@ -484,36 +539,39 @@ void drawGps() {
     display.setCursor(6, 128);
     display.printf("Alt: %.1f m  Spd: %.1f km/h", gps.altitude.meters(),
                    gps.speed.kmph());
-    display.setCursor(6, 140);
-    display.print("UTC: ");
-    display.print(gpsTimestamp());
   }
+  display.setCursor(6, 140);
+  display.print("Local: " + gpsTimestamp());
+  display.setCursor(6, 152);
+  display.print(gpsTimezoneLabel());
+  display.setCursor(6, 164);
+  if (gpsLocalZone >= 0) display.print(clipped(String(AwokTime::kZones[gpsLocalZone].name), 37));
 
   // Link diagnostics: distinguish "wrong baud/wiring" from "no fix yet".
   const uint32_t passed = gps.passedChecksum();
   const uint32_t failed = gps.failedChecksum();
   const uint32_t passedHere =
       passed >= gpsBaudBaselinePassed ? passed - gpsBaudBaselinePassed : passed;
-  display.drawFastHLine(6, 154, 228, kPanel);
+  display.drawFastHLine(6, 180, 228, kPanel);
   display.setTextColor(kAccent, kBackground);
-  display.setCursor(6, 160);
+  display.setCursor(6, 186);
   display.print("LINK DIAGNOSTICS");
   display.setTextColor(ILI9341_WHITE, kBackground);
-  display.setCursor(6, 174);
+  display.setCursor(6, 200);
   display.printf("Baud %lu  chars %lu", gpsCurrentBaud,
                  static_cast<unsigned long>(gps.charsProcessed()));
-  display.setCursor(6, 186);
+  display.setCursor(6, 212);
   display.setTextColor(passedHere > 0 ? kGood : kBad, kBackground);
   display.printf("NMEA ok %lu (this baud %lu)  bad %lu",
                  static_cast<unsigned long>(passed),
                  static_cast<unsigned long>(passedHere),
                  static_cast<unsigned long>(failed));
   display.setTextColor(kMuted, kBackground);
-  display.setCursor(6, 200);
+  display.setCursor(6, 226);
   display.print("Last: ");
   display.print(clipped(String(gpsLastSentence), 32));
   display.setTextColor(passedHere > 0 ? kMuted : kWarn, kBackground);
-  display.setCursor(6, 214);
+  display.setCursor(6, 240);
   if (passedHere == 0) {
     display.print("No valid NMEA: tap Baud to retry.");
   } else if (!gpsHasFix()) {
@@ -578,6 +636,10 @@ void drawWardrive() {
     display.setCursor(6, 208);
     display.print("logging Wi-Fi APs only.");
   }
+  display.setCursor(6, 228);
+  display.print("Local: " + gpsTimestamp());
+  display.setCursor(6, 240);
+  display.print(gpsTimezoneLabel());
   drawFooter("Back", "Home");
 }
 
@@ -592,6 +654,7 @@ static void wardriveEnterWifi() {
 static void wardriveExitWifi() { WiFi.scanDelete(); }
 
 void startWardrive() {
+  stopActiveTools();  // release the previous tool before bringing up both radios
   wardriveNetworks = 0;
   wardriveBleCount = 0;
   wardriveScans = 0;
@@ -610,13 +673,14 @@ void startWardrive() {
   wardriveSched.bleCallbacks = &wardriveBleCallbacks;  // passive scan
   // Wi-Fi window ends when the scan completes; cap high so a slow dual-band
   // sweep is never cut off mid-scan (which would log zero APs).
-  // Long Wi-Fi dwell (many scan passes) between short BLE windows: minimizes the
-  // number of BLE controller init/deinit cycles (each leaks ~0.4 KB DMA in the
-  // closed C5 blob) so BLE survives most of a session, while Wi-Fi -- the
-  // primary wardrive radio -- gets the majority of airtime.
+  // Long Wi-Fi dwell (many scan passes) between short BLE windows gives Wi-Fi
+  // most airtime. Both controllers stay initialized throughout the session.
   wardriveSched.wifiWindowMs = 30000;
   wardriveSched.bleWindowMs = 8000;
-  if (!radioSchedulerBegin(wardriveSched)) return;
+  if (!radioSchedulerBegin(wardriveSched)) {
+    closeWardriveCsv();
+    return;
+  }
 
   Serial.println(radiosCoexist
                      ? "[wardrive] started (Wi-Fi + BLE, time-shared)"
@@ -628,9 +692,14 @@ void startWardrive() {
 }
 
 void stopWardrive() {
+  if (!wardriveActive && !wardriveSched.active) return;
   wardriveActive = false;
-  radioSchedulerEnd(wardriveSched);
+  Serial.println("[wardrive] stopping; closing CSV before radio shutdown");
+  // Only loopTask writes the CSV; radio callbacks enqueue observations. Save
+  // accepted rows before touching the host/controller shutdown path.
   closeWardriveCsv();
+  Serial.println("[wardrive] CSV closed; stopping radios");
+  radioSchedulerEnd(wardriveSched);
   esp_wifi_set_channel(kLinkChannel, WIFI_SECOND_CHAN_NONE);
   linkBroadcastStatus();
   Serial.printf("[wardrive] stopped; %lu Wi-Fi, %lu BLE\n",

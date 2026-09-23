@@ -7,11 +7,9 @@
 // and Samsung Continuity / SmartThings.
 // Passive: never transmits.
 
-BleIntelEntry bleIntelEntries[kMaxBleIntel];
+ToolBuffer<BleIntelEntry, kMaxBleIntel> bleIntelEntries;
 int bleIntelCount = 0;
-BleIntelHit bleIntelHitQueue[kBleIntelHitQueueSlots];
-volatile int bleIntelHitHead = 0;
-volatile int bleIntelHitTail = 0;
+ToolQueue<BleIntelHit, kBleIntelHitQueueSlots> bleIntelHitQueue;
 uint32_t bleIntelStartMs = 0;
 uint32_t lastBleIntelDrawMs = 0;
 
@@ -190,12 +188,11 @@ bool bleClassifyIntel(const NimBLEAdvertisedDevice* device, BleIntelHit& hit) {
 class BleIntelCallbacks : public NimBLEScanCallbacks {
  public:
   void onResult(const NimBLEAdvertisedDevice* device) override {
+    const uint32_t generation = bleIntelHitQueue.generation();
+    if (!generation) return;
     BleIntelHit hit;
     if (!bleClassifyIntel(device, hit)) return;
-    const int next = (bleIntelHitHead + 1) % kBleIntelHitQueueSlots;
-    if (next == bleIntelHitTail) return;  // queue full: drop
-    bleIntelHitQueue[bleIntelHitHead] = hit;
-    bleIntelHitHead = next;
+    bleIntelHitQueue.push(hit, generation);
   }
 };
 
@@ -260,6 +257,7 @@ void sortBleIntel() {
 }
 
 bool exportBleIntelToSd() {
+  if (!bleIntelEntries) return lastBleIntelCsvOk;
   if (!ensureSdCard()) return false;
   const String temporaryPath = String(kBleIntelCsvPath) + ".tmp";
   SD.remove(temporaryPath.c_str());
@@ -342,10 +340,16 @@ void drawBleIntel() {
 }
 
 void startBleIntel() {
+  stopActiveTools();
   if (!ensureBleReady(false)) return;
+  if (!bleIntelEntries.allocate() || !bleIntelHitQueue.begin()) {
+    bleIntelHitQueue.release();
+    bleIntelEntries.release();
+    releaseBleMemory();
+    showToolMemoryError("BLE Intel");
+    return;
+  }
   bleIntelCount = 0;
-  bleIntelHitHead = 0;
-  bleIntelHitTail = 0;
   bleIntelStartMs = millis();
   lastBleIntelDrawMs = 0;
   lastBleIntelCsvOk = false;
@@ -353,7 +357,13 @@ void startBleIntel() {
 
   NimBLEScan* scan = NimBLEDevice::getScan();
   configureBleScan(scan, &bleIntelCallbacks, false, 80, 80, 0);
-  scan->start(0, false, true);
+  if (!scan->start(0, false, true)) {
+    bleIntelHitQueue.release();
+    bleIntelEntries.release();
+    releaseBleMemory();
+    showRadioError("BLE scan could not start");
+    return;
+  }
 
   bleIntelActive = true;
   Serial.println("[bleintel] BLE ecosystem intel scanner started");
@@ -361,21 +371,27 @@ void startBleIntel() {
 }
 
 void stopBleIntel() {
+  if (!bleIntelActive) return;
   bleIntelActive = false;
+  bleIntelHitQueue.pause();
   NimBLEScan* scan = NimBLEDevice::getScan();
   scan->stop();
   scan->clearResults();
   releaseBleMemory();
+  BleIntelHit hit;
+  while (bleIntelHitQueue.pop(hit)) mergeBleIntelHit(hit);
   lastBleIntelCsvOk = exportBleIntelToSd();
   Serial.printf("[bleintel] stopped; %d device(s)\n", bleIntelCount);
+  bleIntelHitQueue.release();
+  bleIntelEntries.release();
+  bleIntelCount = 0;
+  logMemory("BLE Intel buffers released");
 }
 
 void updateBleIntel() {
   if (!bleIntelActive || currentView != View::kBleIntel) return;
-  while (bleIntelHitTail != bleIntelHitHead) {
-    mergeBleIntelHit(bleIntelHitQueue[bleIntelHitTail]);
-    bleIntelHitTail = (bleIntelHitTail + 1) % kBleIntelHitQueueSlots;
-  }
+  BleIntelHit hit;
+  while (bleIntelHitQueue.pop(hit)) mergeBleIntelHit(hit);
   const uint32_t now = millis();
   if (now - lastBleIntelDrawMs >= kBleIntelRedrawMs) {
     lastBleIntelDrawMs = now;

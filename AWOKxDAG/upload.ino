@@ -240,10 +240,11 @@ static bool uploadSyncClock() {
   constexpr time_t kLatestTlsTime = 2145916800;    // 2038-01-01 UTC
   time_t now = time(nullptr);
   if (now > kEarliestTlsTime && now < kLatestTlsTime) return true;
-  configTime(0, 0, "pool.ntp.org", "time.google.com");
+  configTzTime(gpsClockTimezone(), "pool.ntp.org", "time.google.com");
   const uint32_t deadline = millis() + 10000;
   do {
     delay(100);
+    updateGps();
     now = time(nullptr);
   } while ((now <= kEarliestTlsTime || now >= kLatestTlsTime) &&
            static_cast<int32_t>(millis() - deadline) < 0);

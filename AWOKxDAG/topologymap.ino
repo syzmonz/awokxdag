@@ -40,18 +40,16 @@ constexpr uint32_t kTopoHopIntervalMs = 250;
 constexpr uint32_t kTopoRedrawMs = 1000;
 constexpr uint32_t kTopoTelemIntervalMs = 2000;
 
-static TopoAp topoAps[kMaxTopoAps];
+static ToolBuffer<TopoAp, kMaxTopoAps> topoAps;
 static int topoApCount = 0;
 
-static TopoClient topoClients[kMaxTopoClients];
+static ToolBuffer<TopoClient, kMaxTopoClients> topoClients;
 static int topoClientCount = 0;
 
-static TopoProbe topoProbes[kMaxTopoProbes];
+static ToolBuffer<TopoProbe, kMaxTopoProbes> topoProbes;
 static int topoProbeCount = 0;
 
-static TopoHit topoHitQueue[kTopoHitQueueSlots];
-static volatile int topoHitHead = 0;
-static volatile int topoHitTail = 0;
+static ToolQueue<TopoHit, kTopoHitQueueSlots> topoHitQueue;
 
 static int topoHopIndex = 0;
 static uint32_t lastTopoHopMs = 0;
@@ -85,6 +83,8 @@ int topoFindProbe(const uint8_t* mac, const char* ssid) {
 }
 
 void topoPromiscuousCallback(void* buf, wifi_promiscuous_pkt_type_t type) {
+  const uint32_t generation = topoHitQueue.generation();
+  if (!generation) return;
   if (type != WIFI_PKT_MGMT && type != WIFI_PKT_DATA) return;
   const wifi_promiscuous_pkt_t* packet =
       static_cast<const wifi_promiscuous_pkt_t*>(buf);
@@ -154,10 +154,7 @@ void topoPromiscuousCallback(void* buf, wifi_promiscuous_pkt_type_t type) {
     return;
   }
 
-  const int next = (topoHitHead + 1) % kTopoHitQueueSlots;
-  if (next == topoHitTail) return;  // Drop when queue full
-  topoHitQueue[topoHitHead] = hit;
-  topoHitHead = next;
+  topoHitQueue.push(hit, generation);
 }
 
 void topoBroadcastLink(uint8_t linkType, int8_t rssi, uint8_t channel,
@@ -277,9 +274,25 @@ void topoMergeHit(const TopoHit& hit) {
   }
 }
 
+// ESP-NOW callback: copy a bounded hit only. Remote link types 0/1 are
+// tagged as 3/4 so the loop can merge them without rebroadcasting them.
 void topologyOnLinkFrame(const uint8_t* data) {
+  const uint32_t generation = topoHitQueue.generation();
+  if (!generation) return;
   FleetTopologyLink r;
   memcpy(&r, data, sizeof(r));
+  if (r.linkType > 1) return;
+  TopoHit hit = {};
+  hit.type = r.linkType + 3;
+  hit.rssi = r.rssi;
+  hit.channel = r.channel;
+  memcpy(hit.clientMac, r.clientMac, 6);
+  memcpy(hit.bssid, r.targetMac, 6);
+  memcpy(hit.ssid, r.targetName, sizeof(hit.ssid) - 1);
+  topoHitQueue.push(hit, generation);
+}
+
+void topologyMergeLink(const FleetTopologyLink& r) {
   const uint32_t now = millis();
 
   if (r.linkType == 0) {  // Client -> AP
@@ -328,7 +341,26 @@ void topologyOnLinkFrame(const uint8_t* data) {
   }
 }
 
+void topologyDrainHits() {
+  TopoHit hit;
+  while (topoHitQueue.pop(hit)) {
+    if (hit.type < 3) {
+      topoMergeHit(hit);
+    } else {
+      FleetTopologyLink r;
+      r.linkType = hit.type - 3;
+      r.rssi = hit.rssi;
+      r.channel = hit.channel;
+      memcpy(r.clientMac, hit.clientMac, 6);
+      memcpy(r.targetMac, hit.bssid, 6);
+      memcpy(r.targetName, hit.ssid, sizeof(r.targetName));
+      topologyMergeLink(r);
+    }
+  }
+}
+
 bool exportTopologyToSd() {
+  if (!topoAps) return lastTopologyCsvOk;
   if (!ensureSdCard()) return false;
   const String temporaryPath = String(kTopologyCsvPath) + ".tmp";
   SD.remove(temporaryPath.c_str());
@@ -546,11 +578,19 @@ void drawTopologyMap() {
 }
 
 void startTopologyMap() {
+  stopActiveTools();
+  if (!topoAps.allocate() || !topoClients.allocate() ||
+      !topoProbes.allocate() || !topoHitQueue.begin()) {
+    topoHitQueue.release();
+    topoProbes.release();
+    topoClients.release();
+    topoAps.release();
+    showToolMemoryError("Topology Map");
+    return;
+  }
   topoApCount = 0;
   topoClientCount = 0;
   topoProbeCount = 0;
-  topoHitHead = 0;
-  topoHitTail = 0;
   topoHopIndex = 0;
   topoTotalFrames = 0;
   lastTopoHopMs = millis();
@@ -578,7 +618,15 @@ void startTopologyMap() {
   }
 
   WiFi.disconnect(true, false);
-  WiFi.mode(WIFI_MODE_STA);
+  if (!WiFi.mode(WIFI_MODE_STA)) {
+    topoHitQueue.release();
+    topoProbes.release();
+    topoClients.release();
+    topoAps.release();
+    topoApCount = topoClientCount = topoProbeCount = 0;
+    showRadioError("Topology Wi-Fi init failed");
+    return;
+  }
   esp_wifi_set_promiscuous(false);
 
   wifi_promiscuous_filter_t filter = {};
@@ -594,24 +642,29 @@ void startTopologyMap() {
 }
 
 void stopTopologyMap() {
+  if (!topologyActive) return;
   topologyActive = false;
+  topoHitQueue.pause();
   esp_wifi_set_promiscuous(false);
   WiFi.mode(WIFI_MODE_STA);
   WiFi.disconnect(true, false);
+  topologyDrainHits();
   lastTopologyCsvOk = exportTopologyToSd();
   Serial.printf("[topo] stopped; %d APs, %d clients, %d probes, %lu frames\n",
                 topoApCount, topoClientCount, topoProbeCount,
                 static_cast<unsigned long>(topoTotalFrames));
+  topoHitQueue.release();
+  topoProbes.release();
+  topoClients.release();
+  topoAps.release();
+  topoApCount = topoClientCount = topoProbeCount = 0;
+  logMemory("Topology buffers released");
 }
 
 void updateTopologyMap() {
   if (!topologyActive) return;
 
-  // Drain promiscuous hit queue
-  while (topoHitTail != topoHitHead) {
-    topoMergeHit(topoHitQueue[topoHitTail]);
-    topoHitTail = (topoHitTail + 1) % kTopoHitQueueSlots;
-  }
+  topologyDrainHits();
 
   const uint32_t now = millis();
 

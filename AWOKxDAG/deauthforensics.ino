@@ -7,7 +7,7 @@
 // decodes 802.11 reason codes, logs forensic audit trails to SD, and streams
 // $DEAUTH telemetry over Serial and Web Bluetooth.
 
-DeauthForensicEvent deauthEvents[kMaxDeauthForensicEvents];
+ToolBuffer<DeauthForensicEvent, kMaxDeauthForensicEvents> deauthEvents;
 int deauthEventCount = 0;
 
 uint32_t deauthTotalFrames = 0;
@@ -20,16 +20,14 @@ uint32_t deauth5Count = 0;
 uint32_t lastDeauthAttackMs = 0;
 
 static constexpr int kDeauthQueueSlots = AwokPins::kDualBand ? 32 : 16;
-static DeauthHit deauthQueue[kDeauthQueueSlots];
-static volatile int deauthQueueHead = 0;
-static volatile int deauthQueueTail = 0;
+static ToolQueue<DeauthHit, kDeauthQueueSlots> deauthQueue;
 
 struct DeauthApSeq {
   uint8_t bssid[6] = {0};
   uint16_t lastSeq = 0;
   uint32_t lastSeenMs = 0;
 };
-static DeauthApSeq deauthApSeqs[32];
+static ToolBuffer<DeauthApSeq, 32> deauthApSeqs;
 static int deauthApSeqCount = 0;
 
 int deauthForensicsHopIndex = 0;
@@ -74,7 +72,8 @@ const char* deauthReasonDescription(uint16_t reason) {
 }
 
 void IRAM_ATTR deauthForensicsCallback(void* buf, wifi_promiscuous_pkt_type_t type) {
-  if (type != WIFI_PKT_MGMT) return;
+  const uint32_t generation = deauthQueue.generation();
+  if (!generation || type != WIFI_PKT_MGMT) return;
   const wifi_promiscuous_pkt_t* packet =
       static_cast<const wifi_promiscuous_pkt_t*>(buf);
   const uint8_t* payload = packet->payload;
@@ -87,10 +86,7 @@ void IRAM_ATTR deauthForensicsCallback(void* buf, wifi_promiscuous_pkt_type_t ty
   // 12 = Deauth (0x0C), 10 = Disassoc (0x0A)
   if (subtype != 12 && subtype != 10) return;
 
-  const int nextHead = (deauthQueueHead + 1) % kDeauthQueueSlots;
-  if (nextHead == deauthQueueTail) return; // Queue full
-
-  DeauthHit& hit = deauthQueue[deauthQueueHead];
+  DeauthHit hit = {};
   hit.channel = packet->rx_ctrl.channel;
   hit.rssi = packet->rx_ctrl.rssi;
 
@@ -121,21 +117,7 @@ void IRAM_ATTR deauthForensicsCallback(void* buf, wifi_promiscuous_pkt_type_t ty
     hit.attackType = kDeauthTypeTargeted;
   }
 
-  // Check sequence jump against AP baseline
-  hit.seqJump = 0;
-  for (int i = 0; i < deauthApSeqCount; ++i) {
-    if (memcmp(deauthApSeqs[i].bssid, hit.bssid, 6) == 0) {
-      hit.seqJump = static_cast<int16_t>(hit.seqNum) - static_cast<int16_t>(deauthApSeqs[i].lastSeq);
-      if (abs(hit.seqJump) > 40) {
-        hit.attackType = kDeauthTypeAnomaly;
-      }
-      deauthApSeqs[i].lastSeq = hit.seqNum;
-      deauthApSeqs[i].lastSeenMs = millis();
-      break;
-    }
-  }
-
-  deauthQueueHead = nextHead;
+  deauthQueue.push(hit, generation);
 }
 
 static void deauthStreamTelemetry(const DeauthForensicEvent& ev) {
@@ -163,7 +145,24 @@ static void deauthStreamTelemetry(const DeauthForensicEvent& ev) {
 #endif
 }
 
-void deauthProcessHit(const DeauthHit& hit) {
+void deauthProcessHit(const DeauthHit& incoming) {
+  // Sequence history belongs to loopTask, just like the result table.
+  // Never read/write this allocation from the radio callback.
+  DeauthHit hit = incoming;
+  // Check sequence jump against AP baseline
+  hit.seqJump = 0;
+  for (int i = 0; i < deauthApSeqCount; ++i) {
+    if (memcmp(deauthApSeqs[i].bssid, hit.bssid, 6) == 0) {
+      hit.seqJump = static_cast<int16_t>(hit.seqNum) - static_cast<int16_t>(deauthApSeqs[i].lastSeq);
+      if (abs(hit.seqJump) > 40) {
+        hit.attackType = kDeauthTypeAnomaly;
+      }
+      deauthApSeqs[i].lastSeq = hit.seqNum;
+      deauthApSeqs[i].lastSeenMs = millis();
+      break;
+    }
+  }
+
   deauthTotalFrames++;
   lastDeauthAttackMs = millis();
 
@@ -214,6 +213,7 @@ void deauthProcessHit(const DeauthHit& hit) {
 }
 
 bool exportDeauthForensicsToSd() {
+  if (!deauthEvents) return lastDeauthForensicsCsvOk;
   if (!ensureSdCard()) return false;
   const String temporaryPath = String(kDeauthForensicsCsvPath) + ".tmp";
   SD.remove(temporaryPath.c_str());
@@ -443,7 +443,14 @@ void drawDeauthForensics() {
 void startDeauthForensics() {
   stopActiveTools();
   if (!ensureWifiStation(true)) return;
-
+  if (!deauthEvents.allocate() || !deauthApSeqs.allocate() || !deauthQueue.begin()) {
+    deauthQueue.release();
+    deauthApSeqs.release();
+    deauthEvents.release();
+    showToolMemoryError("Deauth Forensics");
+    return;
+  }
+  deauthApSeqCount = 0;
   deauthEventCount = 0;
   deauthTotalFrames = 0;
   deauthTargetedCount = 0;
@@ -453,8 +460,6 @@ void startDeauthForensics() {
   deauth24Count = 0;
   deauth5Count = 0;
   lastDeauthAttackMs = 0;
-  deauthQueueHead = 0;
-  deauthQueueTail = 0;
   deauthForensicsHopIndex = 0;
   lastDeauthForensicsHopMs = millis();
   lastDeauthForensicsDrawMs = 0;
@@ -473,10 +478,20 @@ void startDeauthForensics() {
 }
 
 void stopDeauthForensics() {
+  if (!deauthForensicsActive) return;
   deauthForensicsActive = false;
+  deauthQueue.pause();
   esp_wifi_set_promiscuous(false);
   esp_wifi_set_promiscuous_rx_cb(nullptr);
+  DeauthHit hit;
+  while (deauthQueue.pop(hit)) deauthProcessHit(hit);
   lastDeauthForensicsCsvOk = exportDeauthForensicsToSd();
+  deauthQueue.release();
+  deauthApSeqs.release();
+  deauthEvents.release();
+  deauthEventCount = 0;
+  deauthApSeqCount = 0;
+  logMemory("Deauth Forensics buffers released");
   Serial.println("[deauth-forensics] stopped");
 }
 
@@ -486,11 +501,8 @@ void updateDeauthForensics() {
   const uint32_t now = millis();
 
   // Drain queue
-  while (deauthQueueTail != deauthQueueHead) {
-    const DeauthHit hit = deauthQueue[deauthQueueTail];
-    deauthQueueTail = (deauthQueueTail + 1) % kDeauthQueueSlots;
-    deauthProcessHit(hit);
-  }
+  DeauthHit hit;
+  while (deauthQueue.pop(hit)) deauthProcessHit(hit);
 
   // Channel hopping across all 2.4 GHz and 5 GHz channels
   if (now - lastDeauthForensicsHopMs >= kDeauthForensicsHopMs) {

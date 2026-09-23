@@ -5,6 +5,7 @@
 #include "board_pins.h"
 #include "mini_layout.h"
 #include "mini_pixels.h"
+#include "keyboard_layout.h"
 
 class MiniCanvas : public Adafruit_GFX {
  public:
@@ -51,7 +52,11 @@ class AwokMiniDisplay : public Adafruit_GFX {
   void fillRect(int16_t, int16_t, int16_t, int16_t, uint16_t) override {}
   void drawFastHLine(int16_t, int16_t, int16_t, uint16_t) override {}
   void drawFastVLine(int16_t, int16_t, int16_t, uint16_t) override {}
-  void fillScreen(uint16_t) override { layout.clear(); dirty_ = true; }
+  void fillScreen(uint16_t) override {
+    keyboardActive_ = false;
+    memset(keyboardPreview_, 0, sizeof(keyboardPreview_));
+    layout.clear(); dirty_ = true;
+  }
   using Print::write;
   size_t write(uint8_t c) override {
     if (c == '\n') { cursor_x = 0; cursor_y += textsize_y * 8; }
@@ -104,8 +109,36 @@ class AwokMiniDisplay : public Adafruit_GFX {
     blitCanvas();
     dirty_ = redraw_ = true;  // force a full rebuild on the next present()
   }
-  bool selection(int& x, int& y) const { return layout.selection(x, y); }
+  void keyboard(const char* title, const char* preview, int length, int limit,
+                AwokKeyboard::Mode mode, bool pending) {
+    if (!keyboardActive_) keyboardFocus_ = 1;  // 2 / abc
+    keyboardActive_ = true;
+    keyboardMode_ = mode;
+    keyboardPending_ = pending;
+    keyboardLength_ = length;
+    keyboardLimit_ = limit;
+    strncpy(keyboardTitle_, title, sizeof(keyboardTitle_) - 1);
+    const size_t count = strlen(preview);
+    // Always keep the insertion point visible. Passwords arrive masked.
+    strncpy(keyboardPreview_, preview + (count > 18 ? count - 18 : 0),
+            sizeof(keyboardPreview_) - 1);
+    if (!AwokKeyboard::key(keyboardFocus_, mode).valid()) keyboardFocus_ = 0;
+    dirty_ = true;
+  }
+  bool selection(int& x, int& y) const {
+    if (!keyboardActive_) return layout.selection(x, y);
+    const auto key = AwokKeyboard::key(keyboardFocus_, keyboardMode_);
+    x = key.x + key.w / 2;
+    y = key.y + key.h / 2;
+    return key.valid();
+  }
   void navigate(int direction, bool jump = false) {
+    if (keyboardActive_) {
+      keyboardFocus_ = AwokKeyboard::move(keyboardFocus_, direction, jump,
+                                          keyboardMode_);
+      redraw_ = true;
+      return;
+    }
     if (jump) layout.jump(direction > 0); else layout.move(direction);
     redraw_ = true;
   }
@@ -160,6 +193,12 @@ class AwokMiniDisplay : public Adafruit_GFX {
   }
   void present(bool = true) {
     if (diagnostic_ || !canvas_ || (!dirty_ && !redraw_)) return;
+    if (keyboardActive_) {
+      drawKeyboard();
+      blitCanvas();
+      dirty_ = redraw_ = false;
+      return;
+    }
     if (dirty_) layout.build();
     canvas_->fillScreen(ST7735_BLACK);
     canvas_->setTextSize(1);
@@ -209,6 +248,45 @@ class AwokMiniDisplay : public Adafruit_GFX {
   }
   MiniLayout layout;
  private:
+  void drawKeyboard() {
+    canvas_->fillScreen(ST7735_BLACK);
+    canvas_->setTextSize(1);
+    canvas_->setTextColor(ST7735_CYAN);
+    canvas_->setCursor(2, 2);
+    canvas_->print(keyboardTitle_);
+    canvas_->drawRoundRect(2, 12, 124, 13, 2, ST7735_BLUE);
+    canvas_->setCursor(5, 15);
+    canvas_->setTextColor(ST7735_WHITE);
+    canvas_->print(keyboardPreview_);
+    canvas_->print(keyboardPending_ ? '^' : '_');
+    canvas_->setTextColor(keyboardLength_ == keyboardLimit_ ? ST7735_YELLOW : ST7735_CYAN);
+    canvas_->setCursor(2, 27);
+    canvas_->printf("%d/%d", keyboardLength_, keyboardLimit_);
+    canvas_->setCursor(64, 27);
+    canvas_->printf("%s %s", AwokKeyboard::modeName(keyboardMode_), keyboardPending_ ? "tap" : "");
+    for (int i = 0; i < AwokKeyboard::kSlots; ++i) {
+      const auto key = AwokKeyboard::key(i, keyboardMode_, true);
+      if (!key.valid()) continue;
+      const bool focused = i == keyboardFocus_;
+      const uint16_t border = key.action == AwokKeyboard::Done ? ST7735_GREEN :
+          key.action == AwokKeyboard::Cancel || key.action == AwokKeyboard::Delete ? ST7735_RED : ST7735_BLUE;
+      if (focused) canvas_->fillRect(key.x, key.y, key.w, key.h, ST7735_CYAN);
+      else canvas_->drawRect(key.x, key.y, key.w, key.h, border);
+      canvas_->setTextColor(focused ? ST7735_BLACK : ST7735_WHITE);
+      const bool group = key.sublabel[0];
+      canvas_->setCursor(key.x + (key.w - int(strlen(key.label)) * 6) / 2,
+                         key.y + (group ? 1 : (key.h - 8) / 2));
+      canvas_->print(key.label);
+      if (group) {
+        canvas_->setCursor(key.x + (key.w - int(strlen(key.sublabel)) * 6) / 2, key.y + 9);
+        canvas_->print(key.sublabel);
+      }
+    }
+  }
+  bool keyboardActive_ = false, keyboardPending_ = false;
+  AwokKeyboard::Mode keyboardMode_ = AwokKeyboard::Lower;
+  int keyboardFocus_ = 1, keyboardLength_ = 0, keyboardLimit_ = 32;
+  char keyboardTitle_[22] = {}, keyboardPreview_[20] = {};
   void blitCanvas() {
     uint16_t pixels[128];
     panel_.startWrite();

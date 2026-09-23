@@ -22,7 +22,9 @@ NetJob netLastJob = NetJob::None;
 NetStage netStage = NetStage::Idle;
 String netSsid, netPassword, netEdit, netStatus;
 bool netEditPassword = false;
-int netKeyPage = 0, netMenuPage = 0, netPage = 0, netApPage = 0;
+AwokKeyboard::Mode netKeyMode = AwokKeyboard::Lower;
+AwokKeyboard::Tap netKeyTap;
+int netMenuPage = 0, netPage = 0, netApPage = 0;
 int netHostCount = 0, netResultCount = 0, netSelectedHost = -1, netSelectedResult = 0;
 bool netShowHosts = true, netLimited = false, netSubnetLimited = false;
 uint32_t netFirst = 0, netLast = 0, netCursor = 0, netDeadline = 0, netLastDraw = 0;
@@ -196,21 +198,62 @@ void drawNetworkSetup() {
 }
 void drawNetworkEditor() {
   currentView = View::kNetworkEdit;
-  display.fillScreen(kBackground);
-  drawHeader(netEditPassword ? "WI-FI PASSWORD" : "NETWORK SSID", "select characters; Done to keep");
+  const int limit = netEditPassword ? 63 : 32;
   String preview;
-  if (netEditPassword) { for (size_t i = 0; i < netEdit.length(); ++i) preview += '*'; }
-  else preview = netEdit;
-  netText(50, clipped(preview, 37));
-  netText(65, String(netEdit.length()) + (netEditPassword ? "/63 bytes" : "/32 bytes"));
-  // Printable ASCII, 12 keys per page, with native Mini focus targets.
-  for (int i = 0; i < 12; ++i) {
-    const int code = 32 + netKeyPage * 12 + i;
-    if (code > 126) break;
-    const String label = code == 32 ? String("Space") : String(char(code));
-    drawSmallButton(4 + (i % 3) * 78, 88 + (i / 3) * 40, 74, 34, label, kAccent);
+  if (netEditPassword) {
+    for (size_t i = 0; i < netEdit.length(); ++i) preview += '*';
+    // T9 taps cycle the last character in place; show it in the clear while it
+    // is still being worked on so the layout is usable, then mask it on commit.
+    if (netKeyTap.index >= 0 && netEdit.length())
+      preview.setCharAt(preview.length() - 1, netEdit[netEdit.length() - 1]);
+  } else preview = netEdit;
+#ifdef AWOK_MINI_DISPLAY
+  display.keyboard(netEditPassword ? "WI-FI PASSWORD" : "NETWORK SSID",
+                   preview.c_str(), netEdit.length(), limit, netKeyMode, netKeyTap.index >= 0);
+#else
+  display.fillScreen(kBackground);
+  drawHeader(netEditPassword ? "PASSWORD" : "NETWORK SSID", "Repeat tap: cycle   # next letter");
+  display.fillRoundRect(6, 45, 228, 28, 5, kPanel);
+  display.drawRoundRect(6, 45, 228, 28, 5, kAccent);
+  display.setTextWrap(false);
+  display.setTextSize(2);
+  display.setTextColor(ILI9341_WHITE, kPanel);
+  display.setCursor(12, 51);
+  // Show the tail rather than clipping the new characters off the right.
+  if (preview.length() > 17) preview = preview.substring(preview.length() - 17);
+  display.print(preview);
+  display.print(netKeyTap.index >= 0 ? '^' : '_');
+  display.setTextSize(1);
+  display.setTextColor(netEdit.length() == size_t(limit) ? kWarn : kMuted, kBackground);
+  display.setCursor(8, 79);
+  display.printf("%u/%d%s", unsigned(netEdit.length()), limit,
+                 netEdit.length() == size_t(limit) ? "  Full" : "");
+  display.setCursor(148, 79);
+  display.printf("%s  %s", AwokKeyboard::modeName(netKeyMode),
+                 netKeyTap.index >= 0 ? "Cycling" : "Ready");
+  for (int i = 0; i < AwokKeyboard::kSlots; ++i) {
+    const auto key = AwokKeyboard::key(i, netKeyMode);
+    if (!key.valid()) continue;
+    const uint16_t color = key.action == AwokKeyboard::Done ? kGood :
+        key.action == AwokKeyboard::Delete ? kWarn :
+        key.action == AwokKeyboard::Cancel ? kMuted : kAccent;
+    display.fillRoundRect(key.x, key.y, key.w, key.h, 3, kPanel);
+    display.drawRoundRect(key.x, key.y, key.w, key.h, 3, color);
+    const bool group = key.sublabel[0];
+    const int size = strlen(key.label) == 1 ? 2 : 1;
+    display.setTextSize(size);
+    display.setTextColor(ILI9341_WHITE, kPanel);
+    display.setCursor(key.x + (key.w - int(strlen(key.label)) * 6 * size) / 2,
+                      key.y + (group ? 4 : (key.h - 8 * size) / 2));
+    display.print(key.label);
+    if (group) {
+      display.setTextSize(1);
+      display.setTextColor(color, kPanel);
+      display.setCursor(key.x + (key.w - int(strlen(key.sublabel)) * 6) / 2, key.y + 26);
+      display.print(key.sublabel);
+    }
   }
-  drawFiveButtonFooter("Back", "Prev", "Next", "Del", "Done");
+#endif
 }
 void drawNetworkAps() {
   currentView = View::kNetworkAps;
@@ -642,6 +685,7 @@ void netUpdateTcp() {
   }
 }
 void updateNetworkTools() {
+  if (currentView == View::kNetworkEdit && netKeyTap.expire(millis())) drawNetworkEditor();
   if (!netOpen || netJob == NetJob::None) return;
   if (netJob == NetJob::Join) {
     if (WiFi.status() == WL_CONNECTED) {
@@ -714,22 +758,41 @@ void handleNetworkTouch(int x, int y) {
     return;
   }
   if (currentView == View::kNetworkEdit) {
-    if (y >= kFooterTop) {
-      if (x < 48) { netWipe(netEdit); drawNetworkSetup(); }
-      else if (x < 96) { netKeyPage = (netKeyPage + 7) % 8; drawNetworkEditor(); }
-      else if (x < 144) { netKeyPage = (netKeyPage + 1) % 8; drawNetworkEditor(); }
-      else if (x < 192) { if (netEdit.length()) netEdit.remove(netEdit.length() - 1); drawNetworkEditor(); }
-      else {
+    const int index = AwokKeyboard::hit(x, y, netKeyMode);
+    if (index < 0) return;
+    const auto key = AwokKeyboard::key(index, netKeyMode);
+    if (key.action != AwokKeyboard::Character) netKeyTap.commit();
+    switch (key.action) {
+      case AwokKeyboard::Cancel:
+        netWipe(netEdit);
+        drawNetworkSetup();
+        return;
+      case AwokKeyboard::Done:
         if (netEditPassword) { netWipe(netPassword); netPassword = netEdit; }
         else { if (netSsid != netEdit) netWipe(netPassword); netSsid = netEdit; }
-        netWipe(netEdit); drawNetworkSetup();
+        netWipe(netEdit);
+        drawNetworkSetup();
+        return;
+      case AwokKeyboard::ChangeMode:
+        netKeyMode = static_cast<AwokKeyboard::Mode>((netKeyMode + 1) % 4);
+        break;
+      case AwokKeyboard::Next:
+        break;  // commits immediately, for consecutive letters on the same key
+      case AwokKeyboard::Delete:
+        if (netEdit.length()) netEdit.remove(netEdit.length() - 1);
+        break;
+      case AwokKeyboard::Character: {
+        bool replace = false;
+        const char value = netKeyTap.press(index, netKeyMode, millis(),
+            netEdit.length() < (netEditPassword ? 63U : 32U), replace);
+        if (value) {
+          if (replace && netEdit.length()) netEdit.setCharAt(netEdit.length() - 1, value);
+          else netEdit += value;
+        }
+        break;
       }
-    } else if (y >= 88 && y < 248) {
-      int col = (x - 4) / 78, row = (y - 88) / 40;
-      int code = 32 + netKeyPage * 12 + row * 3 + col;
-      if (x >= 4 && col < 3 && (y - 88) % 40 < 34 && code <= 126 && netEdit.length() < (netEditPassword ? 63U : 32U)) netEdit += char(code);
-      drawNetworkEditor();
     }
+    drawNetworkEditor();
     return;
   }
   if (currentView == View::kNetworkSetup) {
@@ -744,7 +807,7 @@ void handleNetworkTouch(int x, int y) {
       } else { netDisconnect(); drawNetworkSetup(); }
     } else if ((y >= 50 && y < 80) || (y >= 90 && y < 120)) {
       netEditPassword = y >= 90; netEdit = netEditPassword ? netPassword : netSsid;
-      netKeyPage = 2; drawNetworkEditor();
+      netKeyMode = AwokKeyboard::Lower; netKeyTap.commit(); drawNetworkEditor();
     } else if (y >= 130 && y < 160) { netApPage = 0; drawNetworkAps(); }
     else if (y >= 170 && y < 200) netJoin();
     return;
