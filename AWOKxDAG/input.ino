@@ -382,9 +382,13 @@ void handleTouch() {
     return;
   }
   if (currentView == View::kTopologyMap) {
-    if (x < kScreenWidth / 2) {
+    extern bool topoGraphMode;
+    if (x < kScreenWidth / 3) {
       stopTopologyMap();
       drawReconMenu();
+    } else if (x < (kScreenWidth * 2) / 3) {
+      topoGraphMode = !topoGraphMode;
+      drawTopologyMap();
     } else {
       lastTopologyCsvOk = exportTopologyToSd();
       drawTopologyMap();

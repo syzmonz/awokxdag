@@ -455,6 +455,13 @@ void drawTopologyMap() {
 
   display.setTextSize(1);
 
+  extern bool topoGraphMode;
+  if (topoGraphMode) {
+    drawTopologyGraphBody();
+    drawThreeButtonFooter("Back", "List", lastTopologyCsvOk ? "Saved" : "Save");
+    return;
+  }
+
 #ifdef AWOK_MINI_DISPLAY
   int y = 30;
   int linesRendered = 0;
@@ -535,7 +542,7 @@ void drawTopologyMap() {
   }
 #endif
 
-  drawFooter("Back", lastTopologyCsvOk ? "Saved" : "Save");
+  drawThreeButtonFooter("Back", "Graph", lastTopologyCsvOk ? "Saved" : "Save");
 }
 
 void startTopologyMap() {
