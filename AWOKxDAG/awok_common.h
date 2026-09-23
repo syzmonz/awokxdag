@@ -8,6 +8,13 @@
 #include <Adafruit_ILI9341.h>
 #include <SD.h>
 #include <NimBLEDevice.h>
+// 2.5.0 destroys the scan-response timer after freeing the NimBLE port.
+// Every scan tool can reach this teardown path; require the upstream fix.
+#if !defined(NIMBLE_CPP_VERSION) || !defined(NIMBLE_CPP_VERSION_VAL)
+#error "AWOKxDAG requires NimBLE-Arduino 2.5.1 or newer. Update it in Library Manager."
+#elif NIMBLE_CPP_VERSION < NIMBLE_CPP_VERSION_VAL(2, 5, 1)
+#error "NimBLE-Arduino 2.5.0 has a BLE shutdown crash. Install NimBLE-Arduino 2.5.1 or newer."
+#endif
 #include <Preferences.h>
 #include <SPI.h>
 #include <WiFi.h>
@@ -17,6 +24,7 @@
 #include <esp_now.h>
 #include <esp_system.h>
 #include <esp_heap_caps.h>
+#include "tool_memory.h"
 #include <nvs.h>
 #include <WebServer.h>
 #include <DNSServer.h>
@@ -36,12 +44,14 @@
 #include <unistd.h>
 
 #include "board_pins.h"
+#include "keyboard_layout.h"
+#include "gps_timezone.h"
 #ifdef AWOK_MINI_DISPLAY
 #include "mini_display.h"
 #include "mini_boot_screen_data.h"
 #include "result_memory.h"
-// True when BLE participates in a dual-radio session (it time-shares the radio
-// with Wi-Fi via RadioScheduler; it is never resident at the same time).
+// True when BLE participates in a dual-radio session. RadioScheduler alternates
+// scan windows while keeping both controllers resident on supported boards.
 // False keeps a view Wi-Fi-only. Set by radioSchedulerBegin.
 bool radiosCoexist = false;
 #elif defined(AWOK_HEADLESS)

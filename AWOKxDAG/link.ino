@@ -278,16 +278,14 @@ bool linkEnsureEspNow() {
 // ---- Fleet Wardrive: N linked nodes split the plan into one CSV ----------
 // Coordinator inbox for peer rows (POD; filled in the ESP-NOW callback, drained
 // by the aggregator in updateLink). Ack lets a worker retransmit only new rows.
-static FleetWardriveRow fleetRowRing[kFleetRowRingSlots];
-static volatile int fleetRowHead = 0;
-static volatile int fleetRowTail = 0;
+static ToolQueue<FleetWardriveRow, kFleetRowRingSlots> fleetRowRing;
 
 void fleetOnRowFrame(const uint8_t* data) {
-  if (!fleetCoordinator) return;
-  const int next = (fleetRowHead + 1) % kFleetRowRingSlots;
-  if (next == fleetRowTail) return;  // full: drop (worker retransmits)
-  memcpy(&fleetRowRing[fleetRowHead], data, sizeof(FleetWardriveRow));
-  fleetRowHead = next;
+  const uint32_t generation = fleetRowRing.generation();
+  if (!generation) return;
+  FleetWardriveRow row;
+  memcpy(&row, data, sizeof(row));
+  fleetRowRing.push(row, generation);  // full: worker retransmits
 }
 
 void fleetOnAckFrame(const uint8_t* data) {
@@ -619,12 +617,13 @@ void fleetCoordinatorTick(uint32_t now) {
 }
 // ---- Fleet Wardrive Phase 2: row aggregation -----------------------------
 // Worker outbound ring: new rows wait here until the coordinator ACKs them.
-static FleetWardriveRow fleetOutRing[kFleetRowRingSlots];
+static ToolBuffer<FleetWardriveRow, kFleetRowRingSlots> fleetOutRing;
 static int fleetOutHead = 0;
 static int fleetOutTail = 0;
 
 void fleetQueueOutRow(const uint8_t* id, const String& name, uint8_t auth,
                       uint8_t channel, int rssi, bool isBle) {
+  if (!fleetOutRing) return;
   FleetWardriveRow r;
   r.sessionId = fleetSessionId;
   r.seq = ++fleetRowSeq;
@@ -649,6 +648,7 @@ void fleetQueueOutRow(const uint8_t* id, const String& name, uint8_t auth,
 // Worker: during a window, drop ACKed rows and (re)send a few unacked ones to
 // the coordinator (broadcast; only the coordinator stores them).
 void fleetWorkerSendRows() {
+  if (!fleetOutRing) return;
   while (fleetOutTail != fleetOutHead &&
          fleetOutRing[fleetOutTail].seq <= fleetAckedSeq)
     fleetOutTail = (fleetOutTail + 1) % kFleetRowRingSlots;
@@ -666,11 +666,10 @@ void fleetWorkerSendRows() {
 // Coordinator: merge every inbound row (dedup + SD + phone) and advance each
 // member's ACK sequence. Capped to 32 rows per pass to prevent starvation.
 void fleetCoordDrainRows() {
-  if (!fleetCoordinator) { fleetRowTail = fleetRowHead; return; }
+  if (!fleetCoordinator) return;
   int drained = 0;
-  while (fleetRowTail != fleetRowHead && drained < 32) {
-    FleetWardriveRow r = fleetRowRing[fleetRowTail];
-    fleetRowTail = (fleetRowTail + 1) % kFleetRowRingSlots;
+  FleetWardriveRow r;
+  while (drained < 32 && fleetRowRing.pop(r)) {
     ++drained;
     if (r.sessionId != fleetSessionId) continue;
     const int m = fleetIndexOfMac(r.src);
@@ -687,6 +686,30 @@ void fleetCoordDrainRows() {
     }
     wardriveEmitPeerRow(r);  // dedups by id; writes SD + streams to phone
   }
+}
+
+// A node needs only its role's ring, and only while a drive is running.
+// Worker storage is loopTask-only; the coordinator inbox stays in internal RAM.
+bool fleetBeginRowBuffers() {
+  fleetOutHead = fleetOutTail = 0;
+  if (!fleetActive) return true;
+  const bool ok = fleetCoordinator ? fleetRowRing.begin() : fleetOutRing.allocate();
+  if (!ok) {
+    fleetRowRing.release();
+    fleetOutRing.release();
+    showToolMemoryError("Fleet Wardrive");
+  }
+  return ok;
+}
+
+void fleetReleaseRowBuffers() {
+  fleetRowRing.pause();
+  // Finish accepted inbound rows before the caller closes the CSV. The paused
+  // queue cannot grow; each drain consumes at most 32 of the bounded inbox.
+  for (int i = 0; i < kFleetRowRingSlots; i += 32) fleetCoordDrainRows();
+  fleetRowRing.release();
+  fleetOutRing.release();
+  fleetOutHead = fleetOutTail = 0;
 }
 
 // Coordinator: tell each member the highest row seq stored, so it can
@@ -709,9 +732,9 @@ void fleetSendAcks() {
 void fleetStartWardrive() {
   if (!fleetActive) fleetStartCoordinator();
   if (!fleetCoordinator) return;  // only the coordinator starts the fleet
-  fleetWardriveOn = true;
+  startLinkWardrive();  // allocate our ring before asking workers to start
+  fleetWardriveOn = linkWardriveActive;
   fleetBroadcastRoster();
-  startLinkWardrive();  // scan our slice + aggregate locally
 }
 
 // The designated BLE node runs a continuous BLE observer scan (co-resident with
@@ -740,7 +763,9 @@ void fleetStopBleScanOnly() {
 void fleetStopLocal() {
   linkWardriveActive = false;
   fleetStopBleScanOnly();
+  fleetReleaseRowBuffers();
   closeWardriveCsv();
+  logMemory("Fleet buffers released");
   esp_wifi_set_channel(kLinkChannel, WIFI_SECOND_CHAN_NONE);
   linkBroadcastStatus();
 }
@@ -1547,13 +1572,14 @@ void linkIngestScan(int result) {
 }
 
 void startLinkWardrive() {
-  if (wardriveActive) stopWardrive();  // never run both scanners at once
+  stopActiveTools();  // release the previous tool before allocating this drive
   if (!linkEnsureEspNow()) {
     drawLinkWardrive();
     return;
   }
+  if (!fleetBeginRowBuffers()) return;
   wardriveNetworks = 0;
-  wardriveBleCount = 0;  // BLE off in Link v1
+  wardriveBleCount = 0;  // dedicated Fleet BLE nodes still scan below
   wardriveScans = 0;
   wardriveResetDedup();
   wardriveStartMs = millis();
@@ -1586,6 +1612,8 @@ void stopLinkWardrive() {
   linkWardriveActive = false;
   linkInWindow = false;
   WiFi.scanDelete();
+  fleetStopBleScanOnly();
+  fleetReleaseRowBuffers();
   closeWardriveCsv();
   esp_wifi_set_channel(kLinkChannel, WIFI_SECOND_CHAN_NONE);
   linkBroadcastStatus();

@@ -126,6 +126,56 @@ static void onEspNowRecv(const esp_now_recv_info_t*, const uint8_t* data, int le
     memcpy(blob + 12, r.ssid, sl);
     g_results->setValue(blob, 1 + 11 + sl);
     g_results->notify();
+  } else if (type == kLinkMsgFleetHuntResult &&
+             len == static_cast<int>(sizeof(FleetHuntResult))) {
+    FleetHuntResult r;
+    memcpy(&r, data, sizeof(r));
+    if (!g_results) return;
+    char bssidStr[20];
+    snprintf(bssidStr, sizeof(bssidStr), "%02X:%02X:%02X:%02X:%02X:%02X",
+             r.bssid[0], r.bssid[1], r.bssid[2], r.bssid[3], r.bssid[4], r.bssid[5]);
+    char rowBuf[128];
+    int rlen = snprintf(rowBuf, sizeof(rowBuf), "$HUNT,%s,%s,%.6f,%.6f,%.1f,%.1f,%.1f,%d,%u",
+                        bssidStr, r.ssid,
+                        r.lat, r.lon,
+                        r.distanceM, r.bearingDeg,
+                        r.confidenceM,
+                        r.rssi,
+                        r.points);
+    if (rlen > 0) {
+      uint8_t blob[1 + 128];
+      blob[0] = 3;  // kSourceHunt
+      memcpy(blob + 1, rowBuf, rlen);
+      g_results->setValue(blob, 1 + rlen);
+      g_results->notify();
+    }
+  } else if (type == kLinkMsgFleetTopology &&
+             len == static_cast<int>(sizeof(FleetTopologyLink))) {
+    FleetTopologyLink r;
+    memcpy(&r, data, sizeof(r));
+    if (!g_results) return;
+    char clientStr[20];
+    snprintf(clientStr, sizeof(clientStr), "%02X:%02X:%02X:%02X:%02X:%02X",
+             r.clientMac[0], r.clientMac[1], r.clientMac[2], r.clientMac[3], r.clientMac[4], r.clientMac[5]);
+    char rowBuf[128];
+    int rlen = 0;
+    if (r.linkType == 0) {
+      char targetStr[20];
+      snprintf(targetStr, sizeof(targetStr), "%02X:%02X:%02X:%02X:%02X:%02X",
+               r.targetMac[0], r.targetMac[1], r.targetMac[2], r.targetMac[3], r.targetMac[4], r.targetMac[5]);
+      rlen = snprintf(rowBuf, sizeof(rowBuf), "$TOPO,CLI,%s,%s,%d,1",
+                      clientStr, targetStr, r.rssi);
+    } else {
+      rlen = snprintf(rowBuf, sizeof(rowBuf), "$TOPO,PRB,%s,%s,%d,1",
+                      clientStr, r.targetName, r.rssi);
+    }
+    if (rlen > 0) {
+      uint8_t blob[1 + 128];
+      blob[0] = 4;  // kSourceTopo
+      memcpy(blob + 1, rowBuf, rlen);
+      g_results->setValue(blob, 1 + rlen);
+      g_results->notify();
+    }
   }
 }
 

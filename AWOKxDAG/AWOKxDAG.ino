@@ -1808,10 +1808,10 @@ void sortBle() {
 }
 
 void logMemory(const char* stage) {
-  // Report DMA-capable free too: on the C5, Wi-Fi + the BLE controller draw
-  // from the same ~70 KB DMA pool, and DMA exhaustion (not the general heap)
-  // is what starves a BLE scan when both are resident. See the time-multiplex
-  // RadioScheduler, which keeps only one radio DMA-resident at a time.
+  // C5 Wi-Fi and BLE coexistence needs internal/DMA-capable memory. Report
+  // both total free and largest blocks: free PSRAM alone does not establish
+  // whether the controllers can initialize. RadioScheduler alternates scan
+  // windows while keeping both initialized when coexistence succeeds.
   const uint32_t caps = MALLOC_CAP_INTERNAL | MALLOC_CAP_8BIT;
   Serial.printf(
       "[memory] %s: internal free=%u largest=%u; dma free=%u largest=%u; "
@@ -1821,6 +1821,23 @@ void logMemory(const char* stage) {
       unsigned(heap_caps_get_free_size(MALLOC_CAP_DMA)),
       unsigned(heap_caps_get_largest_free_block(MALLOC_CAP_DMA)),
       unsigned(ESP.getFreePsram()));
+}
+
+void showToolMemoryError(const char* tool) {
+  Serial.printf("[memory] %s: buffer allocation failed; tool not started\n", tool);
+  logMemory(tool);
+  currentView = View::kHome;
+  homePage = 1;
+  signalMonitorActive = false;
+  display.fillScreen(kBackground);
+  drawHeader("MEMORY LOW", tool);
+  display.setTextSize(1);
+  display.setTextColor(kWarn, kBackground);
+  display.setCursor(6, 60);
+  display.print("Tool could not start.");
+  display.setCursor(6, 80);
+  display.print("Check Serial Monitor.");
+  drawFooter("Home", "Home");
 }
 
 void showRadioError(const char* message) {
@@ -1885,19 +1902,10 @@ bool ensureBleReady(bool needsWifi) {
 }
 
 void releaseBleMemory() {
-  // One-radio-at-a-time: fully free the BLE controller so Wi-Fi can reclaim its
-  // block. Stop, clear results, let pending callbacks/timers drain, then a FULL
-  // deinit(true) -- the whole point is to empty the DMA pool every cycle so the
-  // repeated init/deinit doesn't slowly leak it away (~0.4 KB/cycle) and starve
-  // the radios after ~10 min.
-  // deinit(false) keeps the NimBLEScan object (and, on the C5 SOC controller,
-  // leaves host allocations behind that the next init re-creates); deinit(true)
-  // deletes the scan object too. The old crash that forced deinit(false) --
-  // ble_npl_callout_deinit() on the scan-response timer after the port was torn
-  // down (null-ptr load on loopTask) -- is guarded in NimBLE 2.5.1:
-  // NimBLEScan::onHostDeinit() deinits that timer and clears
-  // m_srTimerInitialized BEFORE the port teardown, so ~NimBLEScan() no longer
-  // touches it. getScan() re-creates the scan object on the next window.
+  // Release BLE at tool exit or when a Wi-Fi-only tool needs its memory.
+  // Dual-radio scan windows keep the controllers resident. NimBLE >= 2.5.1
+  // (enforced in awok_common.h) cleans up the scan timer BEFORE port teardown;
+  // 2.5.0 instead dereferenced the freed NPL function table in ~NimBLEScan.
   if (!NimBLEDevice::isInitialized()) return;
   NimBLEScan* scan = NimBLEDevice::getScan();
   if (scan) {
@@ -1912,7 +1920,12 @@ void releaseBleMemory() {
   return;
 #else
   delay(100);
-  NimBLEDevice::deinit(true);
+  Serial.println("[ble] releasing scan and controller");
+  if (!NimBLEDevice::deinit(true)) {
+    Serial.println("[ble] deinit failed");
+    logMemory("BLE shutdown failed");
+    return;
+  }
   logMemory("after BLE shutdown");
 #endif
 }
@@ -2004,9 +2017,7 @@ void radioSchedulerEnd(RadioScheduler& s) {
   s.active = false;
   if (s.phase == RadioPhase::kWifi && s.exitWifi) s.exitWifi();
   if (s.bleAvailable) {
-    NimBLEScan* scan = NimBLEDevice::getScan();
-    if (scan) { scan->stop(); scan->clearResults(); }
-    releaseBleMemory();          // single BLE deinit, at tool exit only
+    releaseBleMemory();          // stop/clear/deinit once, at tool exit only
   }
   ensureWifiStation(false);      // STA resident for the rest of the firmware
 }
