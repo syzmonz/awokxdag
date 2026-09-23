@@ -599,6 +599,7 @@ void startTopologyMap() {
   topoStartMs = millis();
   lastTopologyCsvOk = false;
   signalMonitorActive = false;
+  topoGraphReset();
 
   // Pre-seed known APs from wifiEntries if previously scanned
   if (wifiCount > 0) {

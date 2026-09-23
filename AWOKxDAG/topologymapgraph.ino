@@ -24,18 +24,22 @@ static const int16_t kTopoSin[24] = {
   0, -66, -128, -181, -222, -247, -256, -247, -222, -181, -128, -66
 };
 
-static uint8_t topoSlotBssid[16][6];
+static uint8_t topoSlotBssid[kTopoSlots][6];
 static int topoSlotUsed = 0;
 
 int topoSlotFor(const uint8_t* bssid) {
   for (int i = 0; i < topoSlotUsed; ++i) {
-    if (memcmp(topoSlotBssid[i], bssid, 6) == 0) return i % kTopoSlots;
+    if (memcmp(topoSlotBssid[i], bssid, 6) == 0) return i;
   }
-  if (topoSlotUsed < 16) {
+  if (topoSlotUsed < kTopoSlots) {
     memcpy(topoSlotBssid[topoSlotUsed], bssid, 6);
-    return (topoSlotUsed++) % kTopoSlots;
+    return topoSlotUsed++;
   }
   return bssid[5] % kTopoSlots;
+}
+
+void topoGraphReset() {
+  topoSlotUsed = 0;
 }
 
 int topoSinT(int i) { return kTopoSin[((i % 24) + 24) % 24]; }
@@ -145,8 +149,9 @@ void drawTopologyGraphBody() {
     display.fillCircle(ax, ay, nodeR, heat);
     if (ap.isOpen) display.drawCircle(ax, ay, nodeR + 2, topoDim(kWarn, pct));
 
-    String label = ap.ssid[0] ? clipped(ap.ssid, 7)
-                              : String(ap.bssid[4], HEX) + String(ap.bssid[5], HEX);
+    char hexLabel[5];
+    snprintf(hexLabel, sizeof(hexLabel), "%02X%02X", ap.bssid[4], ap.bssid[5]);
+    String label = ap.ssid[0] ? clipped(ap.ssid, 7) : String(hexLabel);
     int lw = label.length() * 6;
     int dxc = ax - cx;
     if (dxc < 0) dxc = -dxc;
