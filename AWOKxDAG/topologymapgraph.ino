@@ -3,6 +3,26 @@ bool topoGraphMode = false;
 constexpr uint32_t kTopoFreshMs = 3000;
 constexpr uint32_t kTopoHideMs = 15000;
 constexpr int kTopoSlots = 12;
+constexpr int kTopoStartIdx = 18;
+
+static const uint16_t kTopoPal[101] = {
+  0x0049, 0x088B, 0x08AC, 0x08CD, 0x08EE, 0x090F, 0x0930, 0x0951, 0x0992, 0x09B2,
+  0x09F3, 0x0A13, 0x1234, 0x1274, 0x1295, 0x12B5, 0x12F5, 0x1316, 0x1336, 0x1356,
+  0x1396, 0x13B5, 0x13D5, 0x13F5, 0x1415, 0x1435, 0x1454, 0x1494, 0x14B4, 0x14D4,
+  0x14F4, 0x1513, 0x1513, 0x1532, 0x1D32, 0x1D51, 0x1D50, 0x1D70, 0x1D6F, 0x1D8F,
+  0x258E, 0x25AE, 0x25AD, 0x25CC, 0x25CC, 0x25EB, 0x2DEB, 0x2DEA, 0x35EA, 0x3E0A,
+  0x4609, 0x4E09, 0x5608, 0x5608, 0x5E08, 0x6627, 0x6E27, 0x7627, 0x7E26, 0x7E26,
+  0x8626, 0x8E25, 0x9645, 0x9E25, 0x9E24, 0xA624, 0xA604, 0xAE04, 0xADE4, 0xB5E4,
+  0xB5E4, 0xBDC4, 0xC5C4, 0xC5A4, 0xCDA4, 0xCD84, 0xD584, 0xD584, 0xDD63, 0xDD63,
+  0xE543, 0xE543, 0xED03, 0xECE3, 0xECA4, 0xEC84, 0xEC44, 0xEC24, 0xF404, 0xF3C4,
+  0xF3A4, 0xF364, 0xF344, 0xF304, 0xF2E4, 0xFAC4, 0xFA84, 0xFA64, 0xFA24, 0xFA04,
+  0xF9E5
+};
+
+static const int16_t kTopoSin[24] = {
+  0, 66, 128, 181, 222, 247, 256, 247, 222, 181, 128, 66,
+  0, -66, -128, -181, -222, -247, -256, -247, -222, -181, -128, -66
+};
 
 static uint8_t topoSlotBssid[16][6];
 static int topoSlotUsed = 0;
@@ -18,21 +38,17 @@ int topoSlotFor(const uint8_t* bssid) {
   return bssid[5] % kTopoSlots;
 }
 
-uint16_t topoHeat(int rssi) {
-  static const uint8_t stops[8][3] = {
-    {10, 14, 39}, {22, 37, 122}, {31, 111, 178}, {34, 193, 195},
-    {62, 196, 109}, {220, 214, 60}, {240, 150, 45}, {236, 60, 60}};
+int topoSinT(int i) { return kTopoSin[((i % 24) + 24) % 24]; }
+int topoCosT(int i) { return kTopoSin[(((i + 6) % 24) + 24) % 24]; }
+
+uint16_t topoColor(int rssi) {
   int v = rssi;
   if (v < -90) v = -90;
   if (v > -30) v = -30;
-  int t = ((v + 90) * 7 * 256) / 60;
-  int seg = t >> 8;
-  if (seg > 6) seg = 6;
-  int f = t & 0xFF;
-  int r = stops[seg][0] + ((stops[seg + 1][0] - stops[seg][0]) * f) / 256;
-  int g = stops[seg][1] + ((stops[seg + 1][1] - stops[seg][1]) * f) / 256;
-  int b = stops[seg][2] + ((stops[seg + 1][2] - stops[seg][2]) * f) / 256;
-  return ((r & 0xF8) << 8) | ((g & 0xFC) << 3) | (b >> 3);
+  int lvl = (v + 90) * 100 / 60;
+  if (lvl < 0) lvl = 0;
+  if (lvl > 100) lvl = 100;
+  return kTopoPal[lvl];
 }
 
 uint16_t topoDim(uint16_t c, int pct) {
@@ -58,8 +74,11 @@ void drawTopologyGraphBody() {
   const int cyBot = kFooterTop;
   const int cy = (cyTop + cyBot) / 2;
   const uint32_t now = millis();
+  static const int coff[4] = {-2, -1, 1, 2};
 
   display.fillRect(0, cyTop, kScreenWidth, cyBot - cyTop, kBackground);
+  display.drawCircle(cx, cy, 48, topoDim(kMuted, 22));
+  display.drawCircle(cx, cy, 95, topoDim(kMuted, 22));
 
   int order[kMaxTopoAps];
   int n = topoApCount;
@@ -82,20 +101,18 @@ void drawTopologyGraphBody() {
     int pct = topoFreshPct(now, ap.lastSeenMs);
     if (pct <= 0) continue;
 
-    int slot = topoSlotFor(ap.bssid);
-    float ang = -1.5707963f + (6.2831853f * slot) / kTopoSlots;
-
+    int idxAP = (kTopoStartIdx + topoSlotFor(ap.bssid) * 2) % 24;
     int rssi = ap.rssi;
     if (rssi < -90) rssi = -90;
     if (rssi > -40) rssi = -40;
     int rr = 46 + (-40 - rssi);
 
-    int ax = cx + (int)(cosf(ang) * rr);
-    int ay = cy + (int)(sinf(ang) * rr);
+    int ax = cx + (topoCosT(idxAP) * rr) / 256;
+    int ay = cy + (topoSinT(idxAP) * rr) / 256;
     if (ay < cyTop + 12) ay = cyTop + 12;
     if (ay > cyBot - 14) ay = cyBot - 14;
 
-    uint16_t heat = topoDim(topoHeat(ap.rssi), pct);
+    uint16_t heat = topoDim(topoColor(ap.rssi), pct);
     display.drawLine(cx, cy, ax, ay, heat);
 
     int drawn = 0;
@@ -104,12 +121,12 @@ void drawTopologyGraphBody() {
       if (memcmp(topoClients[c].bssid, ap.bssid, 6) != 0) continue;
       int cpct = topoFreshPct(now, topoClients[c].lastSeenMs);
       if (cpct <= 0) continue;
-      float ca = ang + (drawn - 1.5f) * 0.5f;
-      int cxx = ax + (int)(cosf(ca) * 14);
-      int cyy = ay + (int)(sinf(ca) * 14);
+      int cidx = idxAP + coff[drawn];
+      int cxx = ax + (topoCosT(cidx) * 14) / 256;
+      int cyy = ay + (topoSinT(cidx) * 14) / 256;
       if (cyy < cyTop + 3) cyy = cyTop + 3;
       if (cyy > cyBot - 3) cyy = cyBot - 3;
-      uint16_t chc = topoDim(topoHeat(topoClients[c].rssi), cpct);
+      uint16_t chc = topoDim(topoColor(topoClients[c].rssi), cpct);
       display.drawLine(ax, ay, cxx, cyy, chc);
       display.fillCircle(cxx, cyy, 2, chc);
       ++drawn;
@@ -142,6 +159,6 @@ void drawTopologyGraphBody() {
   display.fillCircle(cx, cy, 5, kAccent);
   display.drawCircle(cx, cy, 8, kAccent);
   display.setTextColor(kAccent, kBackground);
-  display.setCursor(cx - 6, cy + 10);
-  display.print("C5");
+  display.setCursor(cx - 9, cy + 10);
+  display.print("YOU");
 }
