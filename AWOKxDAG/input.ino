@@ -254,6 +254,28 @@ void handleTouch() {
     }
     return;
   }
+  if (currentView == View::kTopologyMap) {
+    extern bool topoGraphMode;
+    extern bool topoGraphTap(int, int);
+    if (y < kFooterTop) {
+      if (topoGraphMode && y >= kHeaderHeight) {
+        topoGraphTap(x, y);
+        drawTopologyMap();
+      }
+      return;
+    }
+    if (x < kScreenWidth / 3) {
+      stopTopologyMap();
+      drawReconMenu();
+    } else if (x < (kScreenWidth * 2) / 3) {
+      topoGraphMode = !topoGraphMode;
+      drawTopologyMap();
+    } else {
+      lastTopologyCsvOk = exportTopologyToSd();
+      drawTopologyMap();
+    }
+    return;
+  }
   if (y < kFooterTop) return;
   if (currentView == View::kPacketMon) {
     stopPacketMon();
@@ -379,26 +401,6 @@ void handleTouch() {
     } else {
       lastProbeIntelCsvOk = exportProbeIntelToSd();
       drawProbeIntel();
-    }
-    return;
-  }
-  if (currentView == View::kTopologyMap) {
-    extern bool topoGraphMode;
-    extern bool topoGraphTap(int, int);
-    if (topoGraphMode && y >= kHeaderHeight && y < kFooterTop) {
-      topoGraphTap(x, y);
-      drawTopologyMap();
-      return;
-    }
-    if (x < kScreenWidth / 3) {
-      stopTopologyMap();
-      drawReconMenu();
-    } else if (x < (kScreenWidth * 2) / 3) {
-      topoGraphMode = !topoGraphMode;
-      drawTopologyMap();
-    } else {
-      lastTopologyCsvOk = exportTopologyToSd();
-      drawTopologyMap();
     }
     return;
   }
