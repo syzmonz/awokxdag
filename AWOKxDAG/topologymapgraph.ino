@@ -249,7 +249,7 @@ void drawTopoPopup(int idx) {
   display.print(ap.clientCount);
   display.print(" cli");
   display.setCursor(bx + 4, by + 50);
-  display.print("tap another dot or empty space");
+  display.print("tap away to clear");
 }
 
 void drawTopologyGraphBody() {
