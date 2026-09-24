@@ -10,6 +10,7 @@ struct TopoAp {
   uint8_t channel = 0;
   int8_t rssi = -127;
   bool isOpen = false;
+  uint8_t security = 255;
   uint16_t clientCount = 0;
   uint32_t lastSeenMs = 0;
 };
@@ -39,6 +40,34 @@ constexpr int kTopoHitQueueSlots = AwokPins::kDualBand ? 32 : 16;
 constexpr uint32_t kTopoHopIntervalMs = 250;
 constexpr uint32_t kTopoRedrawMs = 1000;
 constexpr uint32_t kTopoTelemIntervalMs = 2000;
+
+constexpr uint8_t kTopoSecOpen = 0;
+constexpr uint8_t kTopoSecWep = 1;
+constexpr uint8_t kTopoSecWpa = 2;
+constexpr uint8_t kTopoSecWpa2 = 3;
+constexpr uint8_t kTopoSecWpa23 = 4;
+constexpr uint8_t kTopoSecWpa3 = 5;
+constexpr uint8_t kTopoSecUnknown = 255;
+
+uint8_t topoSecurityFromAuth(uint8_t auth) {
+  switch (auth) {
+    case WIFI_AUTH_OPEN: return kTopoSecOpen;
+    case WIFI_AUTH_WEP: return kTopoSecWep;
+    case WIFI_AUTH_WPA_PSK: return kTopoSecWpa;
+    case WIFI_AUTH_WPA2_WPA3_PSK:
+    case WIFI_AUTH_WPA3_EXT_PSK_MIXED_MODE:
+    case WIFI_AUTH_WPA2_WPA3_ENTERPRISE: return kTopoSecWpa23;
+    case WIFI_AUTH_WPA3_PSK:
+    case WIFI_AUTH_WPA3_EXT_PSK:
+    case WIFI_AUTH_WPA3_ENT_192:
+    case WIFI_AUTH_WPA3_ENTERPRISE:
+    case WIFI_AUTH_OWE: return kTopoSecWpa3;
+    case WIFI_AUTH_WPA2_PSK:
+    case WIFI_AUTH_WPA_WPA2_PSK:
+    case WIFI_AUTH_ENTERPRISE: return kTopoSecWpa2;
+    default: return kTopoSecUnknown;
+  }
+}
 
 static ToolBuffer<TopoAp, kMaxTopoAps> topoAps;
 static int topoApCount = 0;
@@ -95,6 +124,7 @@ void topoPromiscuousCallback(void* buf, wifi_promiscuous_pkt_type_t type) {
   const uint8_t frameControl = payload[0];
   const uint8_t frameType = (frameControl >> 2) & 0x03;
   TopoHit hit = {};
+  hit.security = kTopoSecUnknown;
   hit.rssi = packet->rx_ctrl.rssi;
   hit.channel = packet->rx_ctrl.channel;
 
@@ -119,19 +149,54 @@ void topoPromiscuousCallback(void* buf, wifi_promiscuous_pkt_type_t type) {
       memcpy(hit.bssid, payload + 16, 6);
       if (length >= 36) {
         uint16_t cap = payload[34] | (payload[35] << 8);
-        hit.isOpen = (cap & 0x0010) == 0;
+        bool privacy = (cap & 0x0010) != 0;
+        bool hasRsn = false;
+        bool hasWpa = false;
+        bool sae = false;
+        bool psk = false;
         int offset = 36;
         while (offset + 2 <= length) {
           uint8_t tag = payload[offset];
           uint8_t tagLen = payload[offset + 1];
           if (offset + 2 + tagLen > length) break;
+          const uint8_t* data = payload + offset + 2;
           if (tag == 0 && tagLen > 0 && tagLen <= 32) {
-            memcpy(hit.ssid, payload + offset + 2, tagLen);
+            memcpy(hit.ssid, data, tagLen);
             hit.ssid[tagLen] = '\0';
-            break;
+          } else if (tag == 0x30 && tagLen >= 8) {
+            hasRsn = true;
+            int p = 6;
+            if (p + 2 <= tagLen) {
+              uint16_t pairwiseCount = data[p] | (data[p + 1] << 8);
+              p += 2 + 4 * pairwiseCount;
+              if (p + 2 <= tagLen) {
+                uint16_t akmCount = data[p] | (data[p + 1] << 8);
+                int akmBase = p + 2;
+                for (int a = 0; a < akmCount && akmBase + 4 * a + 3 < tagLen; ++a) {
+                  uint8_t suite = data[akmBase + 4 * a + 3];
+                  if (suite == 0x08 || suite == 0x09) sae = true;
+                  else if (suite == 0x02 || suite == 0x06) psk = true;
+                }
+              }
+            }
+          } else if (tag == 0xDD && tagLen >= 4 && data[0] == 0x00 &&
+                     data[1] == 0x50 && data[2] == 0xF2 && data[3] == 0x01) {
+            hasWpa = true;
           }
           offset += 2 + tagLen;
         }
+        if (hasRsn) {
+          if (sae && psk) hit.security = kTopoSecWpa23;
+          else if (sae) hit.security = kTopoSecWpa3;
+          else hit.security = kTopoSecWpa2;
+        } else if (hasWpa) {
+          hit.security = kTopoSecWpa;
+        } else if (privacy) {
+          hit.security = kTopoSecWep;
+        } else {
+          hit.security = kTopoSecOpen;
+        }
+        hit.isOpen = hit.security == kTopoSecOpen;
       }
     } else {
       return;
@@ -186,6 +251,7 @@ void topoMergeHit(const TopoHit& hit) {
     topoAps[idx].channel = hit.channel;
     topoAps[idx].rssi = hit.rssi;
     topoAps[idx].isOpen = hit.isOpen;
+    topoAps[idx].security = hit.security;
     topoAps[idx].lastSeenMs = now;
     if (hit.ssid[0] != '\0') {
       strncpy(topoAps[idx].ssid, hit.ssid, sizeof(topoAps[idx].ssid) - 1);
@@ -283,6 +349,7 @@ void topologyOnLinkFrame(const uint8_t* data) {
   memcpy(&r, data, sizeof(r));
   if (r.linkType > 1) return;
   TopoHit hit = {};
+  hit.security = kTopoSecUnknown;
   hit.type = r.linkType + 3;
   hit.rssi = r.rssi;
   hit.channel = r.channel;
@@ -613,6 +680,7 @@ void startTopologyMap() {
         topoAps[idx].channel = wifiEntries[i].channel;
         topoAps[idx].rssi = wifiEntries[i].rssi;
         topoAps[idx].isOpen = (wifiEntries[i].auth == WIFI_AUTH_OPEN);
+        topoAps[idx].security = topoSecurityFromAuth((uint8_t)wifiEntries[i].auth);
         topoAps[idx].lastSeenMs = millis();
       }
     }

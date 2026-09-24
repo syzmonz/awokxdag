@@ -61,12 +61,6 @@ int topoChanIdx(int ch) {
   return i;
 }
 
-int topoFanOffset(int w) {
-  if (w <= 0) return 0;
-  int step = ((w + 1) / 2) * 12;
-  return (w & 1) ? step : -step;
-}
-
 uint32_t topoGroupHash(const char* ssid, const uint8_t* bssid) {
   uint32_t h = 2166136261u;
   if (ssid && ssid[0]) {
@@ -188,6 +182,22 @@ void topoGraphReset() {
   }
 }
 
+const char* topoSecurityLabel(uint8_t security) {
+  switch (security) {
+    case kTopoSecOpen: return "Open";
+    case kTopoSecWep: return "WEP";
+    case kTopoSecWpa: return "WPA";
+    case kTopoSecWpa2: return "WPA2";
+    case kTopoSecWpa23: return "WPA2/3";
+    case kTopoSecWpa3: return "WPA3";
+    default: return "Unknown";
+  }
+}
+
+bool topoSecurityWarn(uint8_t security) {
+  return security == kTopoSecOpen || security == kTopoSecWep || security == kTopoSecWpa;
+}
+
 bool topoGraphTap(int x, int y) {
   int best = -1;
   int bestD2 = 23 * 23 + 1;
@@ -226,12 +236,14 @@ void drawTopoPopup(int idx) {
   display.setCursor(bx + 4, by + 27);
   display.print("ch ");
   display.print(ap.channel);
-  display.print("   ");
+  display.print("  ");
+  display.print(ap.channel <= 14 ? "2.4GHz" : "5GHz");
+  display.print("  ");
   display.print(ap.rssi);
-  display.print(" dBm");
+  display.print("dBm");
   display.setCursor(bx + 4, by + 39);
-  display.setTextColor(ap.isOpen ? kWarn : kMuted, kPanel);
-  display.print(ap.isOpen ? "OPEN" : "secured");
+  display.setTextColor(topoSecurityWarn(ap.security) ? kWarn : kMuted, kPanel);
+  display.print(topoSecurityLabel(ap.security));
   display.setTextColor(kMuted, kPanel);
   display.print("   ");
   display.print(ap.clientCount);
@@ -359,44 +371,77 @@ void drawTopologyGraphBody() {
     }
   }
 
-  topoNodeCount = 0;
+  int posX[kTopoMaxNodes];
+  int posY[kTopoMaxNodes];
+  int posAngle[kTopoMaxNodes];
+  int nodeRadius[kTopoMaxNodes];
+  uint16_t nodeHeat[kTopoMaxNodes];
+
   for (int s = 0; s < shownN; ++s) {
     const TopoAp& ap = topoAps[shownIdx[s]];
     int pct = topoFreshPct(now, ap.lastSeenMs);
     int g = groupOf[s];
     int anchorS = groupAnchorPos[g];
     const TopoAp& anchor = topoAps[shownIdx[anchorS]];
-    int idx = topoChanIdx(anchor.channel);
+    int baseIdx = topoChanIdx(anchor.channel);
+    int anchorR = topoRadiusForRssi(shownRssi[anchorS]);
+    int rr = anchorR;
+    int idx = baseIdx;
 
-    int ordinal = 0;
     if (s != anchorS) {
-      ordinal = 1;
+      int rank = 1;
       for (int s2 = 0; s2 < shownN; ++s2) {
-        if (s2 == anchorS || groupOf[s2] != g) continue;
-        if (memcmp(topoAps[shownIdx[s2]].bssid, ap.bssid, 6) < 0) ++ordinal;
+        if (s2 == anchorS || groupOf[s2] != g || s2 == s) continue;
+        const TopoAp& other = topoAps[shownIdx[s2]];
+        if (other.channel < ap.channel ||
+            (other.channel == ap.channel && memcmp(other.bssid, ap.bssid, 6) < 0)) {
+          ++rank;
+        }
       }
+      int arcStep = (rank + 1) / 2;
+      int arcDir = (rank & 1) ? -1 : 1;
+      idx = baseIdx + arcDir * arcStep;
+      int ownR = topoRadiusForRssi(shownRssi[s]);
+      rr = (anchorR * 3 + ownR) / 4;
     }
 
-    int anchorR = topoRadiusForRssi(shownRssi[anchorS]);
-    int ownR = topoRadiusForRssi(shownRssi[s]);
-    int rr = s == anchorS ? anchorR : (anchorR * 3 + ownR) / 4;
     int groupOff = topoGroupLane(anchor.ssid, anchor.bssid);
-    int memberOff = topoFanOffset(ordinal);
-    int off = groupOff + memberOff;
-    if (off < -40) off = -40;
-    if (off > 40) off = 40;
-
     int bx = cx + (topoCosT(idx) * rr) / 256;
     int by = cy + (topoSinT(idx) * rr) / 256;
-    int ax = bx + (-topoSinT(idx) * off) / 256;
-    int ay = by + (topoCosT(idx) * off) / 256;
+    int ax = bx + (-topoSinT(baseIdx) * groupOff) / 256;
+    int ay = by + (topoCosT(baseIdx) * groupOff) / 256;
     if (ax < 9) ax = 9;
     if (ax > kScreenWidth - 9) ax = kScreenWidth - 9;
     if (ay < cyTop + 11) ay = cyTop + 11;
     if (ay > cyBot - 13) ay = cyBot - 13;
 
-    uint16_t heat = topoDim(topoColor(shownRssi[s], minR, span), pct);
-    display.drawLine(cx, cy, ax, ay, topoDim(heat, 55));
+    posX[s] = ax;
+    posY[s] = ay;
+    posAngle[s] = idx;
+    nodeRadius[s] = 5 + (ap.clientCount > 3 ? 3 : ap.clientCount);
+    nodeHeat[s] = topoDim(topoColor(shownRssi[s], minR, span), pct);
+  }
+
+  for (int g = 0; g < groupCount; ++g) {
+    int anchorS = groupAnchorPos[g];
+    if (anchorS < 0 || anchorS >= shownN) continue;
+    display.drawLine(cx, cy, posX[anchorS], posY[anchorS], topoDim(nodeHeat[anchorS], 55));
+    for (int s = 0; s < shownN; ++s) {
+      if (groupOf[s] != g || s == anchorS) continue;
+      display.drawLine(posX[anchorS], posY[anchorS], posX[s], posY[s], topoDim(nodeHeat[s], 62));
+    }
+  }
+
+  topoNodeCount = 0;
+  for (int s = 0; s < shownN; ++s) {
+    const TopoAp& ap = topoAps[shownIdx[s]];
+    int pct = topoFreshPct(now, ap.lastSeenMs);
+    int g = groupOf[s];
+    int anchorS = groupAnchorPos[g];
+    int ax = posX[s];
+    int ay = posY[s];
+    int idx = posAngle[s];
+    uint16_t heat = nodeHeat[s];
 
     int drawn = 0;
     static const int coff[4] = {-2, -1, 1, 2};
@@ -418,7 +463,7 @@ void drawTopologyGraphBody() {
       ++drawn;
     }
 
-    int nodeR = 5 + (ap.clientCount > 3 ? 3 : ap.clientCount);
+    int nodeR = nodeRadius[s];
     display.fillCircle(ax, ay, nodeR, heat);
     if (ap.isOpen) display.drawCircle(ax, ay, nodeR + 2, topoDim(kWarn, pct));
     if (topoHasSel && memcmp(topoSelBssid, ap.bssid, 6) == 0) display.drawCircle(ax, ay, nodeR + 4, kForeground);

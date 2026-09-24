@@ -885,6 +885,7 @@ struct TopoHit {
   int8_t rssi;
   uint8_t channel;
   bool isOpen;
+  uint8_t security;
   char ssid[33];
 };
 
