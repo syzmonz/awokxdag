@@ -88,7 +88,8 @@ bool topoGraphTap(int x, int y) {
   return false;
 }
 
-void drawTopoPopup(const TopoAp& ap) {
+void drawTopoPopup(int idx) {
+  const TopoAp& ap = topoAps[idx];
   const int bx = 6;
   const int by = 44;
   const int bw = 228;
@@ -249,6 +250,6 @@ void drawTopologyGraphBody() {
       if (memcmp(topoAps[i].bssid, topoSelBssid, 6) == 0) { si = i; break; }
     }
     if (si < 0) topoHasSel = false;
-    else drawTopoPopup(topoAps[si]);
+    else drawTopoPopup(si);
   }
 }
