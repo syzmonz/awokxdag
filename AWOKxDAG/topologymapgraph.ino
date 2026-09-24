@@ -2,8 +2,7 @@ bool topoGraphMode = false;
 
 constexpr uint32_t kTopoFreshMs = 3000;
 constexpr uint32_t kTopoHideMs = 15000;
-constexpr int kTopoSlots = 12;
-constexpr int kTopoStartIdx = 18;
+constexpr int kTopoMaxNodes = 8;
 
 static const uint16_t kTopoPal[101] = {
   0x0049, 0x088B, 0x08AC, 0x08CD, 0x08EE, 0x090F, 0x0930, 0x0951, 0x0992, 0x09B2,
@@ -24,26 +23,28 @@ static const int16_t kTopoSin[24] = {
   0, -66, -128, -181, -222, -247, -256, -247, -222, -181, -128, -66
 };
 
-static uint8_t topoSlotBssid[kTopoSlots][6];
-static int topoSlotUsed = 0;
-
-int topoSlotFor(const uint8_t* bssid) {
-  for (int i = 0; i < topoSlotUsed; ++i) {
-    if (memcmp(topoSlotBssid[i], bssid, 6) == 0) return i;
-  }
-  if (topoSlotUsed < kTopoSlots) {
-    memcpy(topoSlotBssid[topoSlotUsed], bssid, 6);
-    return topoSlotUsed++;
-  }
-  return bssid[5] % kTopoSlots;
-}
-
-void topoGraphReset() {
-  topoSlotUsed = 0;
-}
+static int topoNodeX[kTopoMaxNodes];
+static int topoNodeY[kTopoMaxNodes];
+static uint8_t topoNodeBssid[kTopoMaxNodes][6];
+static int topoNodeCount = 0;
+static uint8_t topoSelBssid[6];
+static bool topoHasSel = false;
 
 int topoSinT(int i) { return kTopoSin[((i % 24) + 24) % 24]; }
 int topoCosT(int i) { return kTopoSin[(((i + 6) % 24) + 24) % 24]; }
+
+int topoChanIdx(int ch) {
+  if (ch <= 14) {
+    int i = 13 + ((ch - 1) * 10) / 13;
+    if (i > 23) i = 23;
+    if (i < 13) i = 13;
+    return i;
+  }
+  int i = 1 + (ch - 36) / 12;
+  if (i > 11) i = 11;
+  if (i < 1) i = 1;
+  return i;
+}
 
 uint16_t topoColor(int rssi, int minR, int span) {
   int lvl = (rssi - minR) * 100 / span;
@@ -69,13 +70,58 @@ int topoFreshPct(uint32_t now, uint32_t lastSeen) {
   return 100 - (int)((age - kTopoFreshMs) * 70 / (kTopoHideMs - kTopoFreshMs));
 }
 
+void topoGraphReset() {
+  topoHasSel = false;
+}
+
+bool topoGraphTap(int x, int y) {
+  for (int i = 0; i < topoNodeCount; ++i) {
+    int dx = x - topoNodeX[i];
+    int dy = y - topoNodeY[i];
+    if (dx * dx + dy * dy <= 121) {
+      memcpy(topoSelBssid, topoNodeBssid[i], 6);
+      topoHasSel = true;
+      return true;
+    }
+  }
+  topoHasSel = false;
+  return false;
+}
+
+void drawTopoPopup(const TopoAp& ap) {
+  const int bx = 6;
+  const int by = 44;
+  const int bw = 228;
+  const int bh = 46;
+  display.fillRect(bx, by, bw, bh, kPanel);
+  display.drawRect(bx, by, bw, bh, kAccent);
+  display.setTextColor(kAccent, kPanel);
+  display.setCursor(bx + 4, by + 3);
+  display.print(ap.ssid[0] ? clipped(ap.ssid, 36) : String("<hidden>"));
+  display.setTextColor(kForeground, kPanel);
+  display.setCursor(bx + 4, by + 14);
+  display.print(macToString(ap.bssid));
+  display.setCursor(bx + 4, by + 25);
+  display.print("ch ");
+  display.print(ap.channel);
+  display.print("   ");
+  display.print(ap.rssi);
+  display.print(" dBm");
+  display.setCursor(bx + 4, by + 36);
+  display.setTextColor(ap.isOpen ? kWarn : kMuted, kPanel);
+  display.print(ap.isOpen ? "OPEN" : "secured");
+  display.setTextColor(kMuted, kPanel);
+  display.print("   ");
+  display.print(ap.clientCount);
+  display.print(" cli");
+}
+
 void drawTopologyGraphBody() {
   const int cx = kScreenWidth / 2;
   const int cyTop = kHeaderHeight;
   const int cyBot = kFooterTop;
   const int cy = (cyTop + cyBot) / 2;
   const uint32_t now = millis();
-  static const int coff[4] = {-2, -1, 1, 2};
 
   display.fillRect(0, cyTop, kScreenWidth, cyBot - cyTop, kBackground);
   display.drawCircle(cx, cy, 48, topoDim(kMuted, 22));
@@ -106,19 +152,24 @@ void drawTopologyGraphBody() {
   int span = maxR - minR;
   if (span < 20) span = 20;
 
-  int shown = 0;
-  const int kMaxNodes = 8;
+  int spoke[24];
+  for (int i = 0; i < 24; ++i) spoke[i] = 0;
 
-  for (int k = 0; k < n && shown < kMaxNodes; ++k) {
+  int shown = 0;
+  topoNodeCount = 0;
+
+  for (int k = 0; k < n && shown < kTopoMaxNodes; ++k) {
     const TopoAp& ap = topoAps[order[k]];
     int pct = topoFreshPct(now, ap.lastSeenMs);
     if (pct <= 0) continue;
 
-    int idxAP = (kTopoStartIdx + topoSlotFor(ap.bssid) * 2) % 24;
+    int idxAP = topoChanIdx(ap.channel);
     int rssi = ap.rssi;
     if (rssi < -88) rssi = -88;
     if (rssi > -32) rssi = -32;
     int rr = 32 + (-32 - rssi) * 80 / 56;
+    rr += spoke[idxAP] * 6;
+    spoke[idxAP]++;
 
     int ax = cx + (topoCosT(idxAP) * rr) / 256;
     int ay = cy + (topoSinT(idxAP) * rr) / 256;
@@ -129,6 +180,7 @@ void drawTopologyGraphBody() {
     display.drawLine(cx, cy, ax, ay, heat);
 
     int drawn = 0;
+    static const int coff[4] = {-2, -1, 1, 2};
     for (int c = 0; c < topoClientCount && drawn < 4; ++c) {
       if (!topoClients[c].hasBssid) continue;
       if (memcmp(topoClients[c].bssid, ap.bssid, 6) != 0) continue;
@@ -171,8 +223,13 @@ void drawTopologyGraphBody() {
     display.setTextColor(topoDim(ap.isOpen ? kWarn : kForeground, pct), kBackground);
     display.setCursor(lx, ly);
     display.print(label);
+
+    topoNodeX[shown] = ax;
+    topoNodeY[shown] = ay;
+    memcpy(topoNodeBssid[shown], ap.bssid, 6);
     ++shown;
   }
+  topoNodeCount = shown;
 
   if (shown == 0) {
     display.setTextColor(kMuted, kBackground);
@@ -185,4 +242,13 @@ void drawTopologyGraphBody() {
   display.setTextColor(kAccent, kBackground);
   display.setCursor(cx - 9, cy + 10);
   display.print("YOU");
+
+  if (topoHasSel) {
+    int si = -1;
+    for (int i = 0; i < topoApCount; ++i) {
+      if (memcmp(topoAps[i].bssid, topoSelBssid, 6) == 0) { si = i; break; }
+    }
+    if (si < 0) topoHasSel = false;
+    else drawTopoPopup(topoAps[si]);
+  }
 }

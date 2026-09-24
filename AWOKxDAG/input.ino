@@ -384,6 +384,12 @@ void handleTouch() {
   }
   if (currentView == View::kTopologyMap) {
     extern bool topoGraphMode;
+    extern bool topoGraphTap(int, int);
+    if (topoGraphMode && y >= kHeaderHeight && y < kFooterTop) {
+      topoGraphTap(x, y);
+      drawTopologyMap();
+      return;
+    }
     if (x < kScreenWidth / 3) {
       stopTopologyMap();
       drawReconMenu();
