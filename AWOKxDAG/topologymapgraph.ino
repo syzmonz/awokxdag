@@ -229,7 +229,7 @@ void drawTopoPopup(int idx) {
   display.drawRect(bx, by, bw, bh, kAccent);
   display.setTextColor(kAccent, kPanel);
   display.setCursor(bx + 4, by + 3);
-  display.print(ap.ssid[0] ? clipped(ap.ssid, 36) : String("<hdn>"));
+  display.print(ap.ssid[0] ? clipped(ap.ssid, 36) : String("<hidden>"));
   display.setTextColor(kForeground, kPanel);
   display.setCursor(bx + 4, by + 15);
   display.print(macToString(ap.bssid));
