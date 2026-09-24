@@ -229,7 +229,7 @@ void drawTopoPopup(int idx) {
   display.drawRect(bx, by, bw, bh, kAccent);
   display.setTextColor(kAccent, kPanel);
   display.setCursor(bx + 4, by + 3);
-  display.print(ap.ssid[0] ? clipped(ap.ssid, 36) : String("<hidden>"));
+  display.print(ap.ssid[0] ? clipped(ap.ssid, 36) : String("<hdn>"));
   display.setTextColor(kForeground, kPanel);
   display.setCursor(bx + 4, by + 15);
   display.print(macToString(ap.bssid));
@@ -469,9 +469,7 @@ void drawTopologyGraphBody() {
     if (topoHasSel && memcmp(topoSelBssid, ap.bssid, 6) == 0) display.drawCircle(ax, ay, nodeR + 4, kForeground);
 
     if (s == anchorS) {
-      char hexLabel[5];
-      snprintf(hexLabel, sizeof(hexLabel), "%02X%02X", ap.bssid[4], ap.bssid[5]);
-      String label = ap.ssid[0] ? clipped(ap.ssid, 10) : String(hexLabel);
+      String label = ap.ssid[0] ? clipped(ap.ssid, 10) : String("<hdn>");
       int lw = label.length() * 6;
       int dx = ax - cx;
       int dy = ay - cy;
