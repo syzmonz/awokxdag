@@ -757,6 +757,18 @@ void drawFooter(const char* leftLabel, const char* rightLabel) {
   drawButton(124, 284, 112, 30, rightLabel, kAccent);
 }
 
+void drawHomeVersion(int x, int w) {
+  display.drawRoundRect(x, 284, w, 30, 6, kMuted);
+  display.setTextSize(1);
+  display.setTextColor(ILI9341_WHITE, kBackground);
+  int16_t bx, by;
+  uint16_t bw, bh;
+  display.getTextBounds(kVersion, 0, 0, &bx, &by, &bw, &bh);
+  display.setCursor(x + (w - static_cast<int>(bw)) / 2,
+                    284 + (30 - static_cast<int>(bh)) / 2);
+  display.print(kVersion);
+}
+
 void drawSmallButton(int x, int y, int w, int h, const String& label,
                      uint16_t outline) {
 #ifdef AWOK_MINI_DISPLAY
@@ -1005,8 +1017,12 @@ void drawHome() {
   if (homePage > 0) display.button(4, 284, 106, 30, "Prev", kMuted);
   if (homePage + 1 < pages) display.button(128, 284, 106, 30, "Next", kAccent);
 #else
-  drawFooter(homePage > 0 ? "Prev" : kVersion,
-             homePage + 1 < pages ? "Next" : kVersion);
+  display.fillRect(0, kFooterTop, kScreenWidth, kScreenHeight - kFooterTop,
+                   kBackground);
+  if (homePage > 0) drawButton(4, 284, 112, 30, "Prev", kMuted);
+  else drawHomeVersion(4, 112);
+  if (homePage + 1 < pages) drawButton(124, 284, 112, 30, "Next", kAccent);
+  else drawHomeVersion(124, 112);
 #endif
 }
 
