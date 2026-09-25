@@ -61,7 +61,7 @@ void appendAuthFloodLog() {
 void drawAuthFlood() {
   currentView = View::kAuthFlood;
   display.fillScreen(kBackground);
-  drawHeader("AUTH FLOOD", authFloodAlert ? "ALERT: auth/assoc flood"
+  drawMonitorHeader("AUTH FLOOD", authFloodActive, authFloodAlert ? "ALERT: auth/assoc flood"
                                           : "watching for connection DoS");
   display.setTextSize(2);
   display.setTextColor(authFloodAlert ? kBad : kGood, kBackground);
@@ -101,7 +101,7 @@ void drawAuthFlood() {
   display.print("floods an AP's client table (DoS).");
   display.setCursor(6, 216);
   display.print("Passive; nothing transmitted.");
-  drawFooter("Back", "Reset");
+  drawFooter(authFloodActive ? "Stop" : "Back", "Reset");
 }
 
 void resetAuthFlood() {

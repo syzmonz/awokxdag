@@ -130,7 +130,7 @@ void mergeRogueHit(const RogueHit& hit) {
 void drawRogueWatch() {
   currentView = View::kRogueWatch;
   display.fillScreen(kBackground);
-  drawHeader("ROGUE WATCH", rogueAlertCount
+  drawMonitorHeader("ROGUE WATCH", rogueWatchActive, rogueAlertCount
                                 ? "ALERT: possible evil twin"
                                 : "watching for AP impersonation");
   display.setTextSize(2);
@@ -164,7 +164,7 @@ void drawRogueWatch() {
     display.setCursor(6, 110);
     display.print("No SSID seen on two BSSIDs yet.");
   }
-  drawFooter("Home", "Home");
+  drawFooter(rogueWatchActive ? "Stop" : "Back", "Home");
 }
 
 void startRogueWatch() {

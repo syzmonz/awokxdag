@@ -8,44 +8,24 @@ constexpr int kBacklightTimeoutOptionCount = static_cast<int>(
 const uint8_t kBrightnessOptions[] = {20, 40, 60, 80, 100};
 constexpr int kBrightnessOptionCount =
     static_cast<int>(sizeof(kBrightnessOptions) / sizeof(kBrightnessOptions[0]));
-const uint16_t kBatteryCapacityOptions[] = {500, 1000, 1500, 2000, 2500,
-                                            3000, 4000, 5000};
+const uint16_t kBatteryCapacityOptions[] = {500,  1000, 1500, 2000,
+                                            2500, 3000, 4000, 5000};
 constexpr int kBatteryCapacityOptionCount = static_cast<int>(
     sizeof(kBatteryCapacityOptions) / sizeof(kBatteryCapacityOptions[0]));
 constexpr uint16_t kBatteryCapacityDefaultMah = 2000;
-const uint8_t kBatteryTuneOptions[] = {50, 55, 60, 65, 70, 75, 80, 85, 90, 95,
-                                       100, 105, 110, 115, 120, 125, 130, 135,
-                                       140, 145, 150};
+const uint8_t kBatteryTuneOptions[] = {50,  55,  60,  65,  70,  75,  80,
+                                       85,  90,  95,  100, 105, 110, 115,
+                                       120, 125, 130, 135, 140, 145, 150};
 constexpr int kBatteryTuneOptionCount = static_cast<int>(
     sizeof(kBatteryTuneOptions) / sizeof(kBatteryTuneOptions[0]));
 constexpr uint8_t kBatteryTuneDefault = 100;
-constexpr int kSettingsRow0 = 48;
-constexpr int kSettingsRowH = 28;
-constexpr int kSettingsPitch = 30;
-constexpr int kSettingsPageCount = 2;
-int settingsPage = 0;
-
-enum SettingItem : uint8_t {
-  kItemBright, kItemGps, kItemSplash, kItemActive, kItemNmea,
-  kItemSleep, kItemScreenTest, kItemCapacity, kItemTune
-};
-const uint8_t kSettingsPage0[] = {kItemBright, kItemGps, kItemSplash,
-                                 kItemActive, kItemNmea, kItemCapacity,
-                                 kItemTune};
-const uint8_t kSettingsPage1[] = {kItemSleep, kItemScreenTest};
-constexpr int kSettingsPage0Count =
-    static_cast<int>(sizeof(kSettingsPage0) / sizeof(kSettingsPage0[0]));
-constexpr int kSettingsPage1Count =
-    static_cast<int>(sizeof(kSettingsPage1) / sizeof(kSettingsPage1[0]));
-
-const uint8_t* settingsPageItems(int page, int& count) {
-  if (page == 1) {
-    count = kSettingsPage1Count;
-    return kSettingsPage1;
-  }
-  count = kSettingsPage0Count;
-  return kSettingsPage0;
-}
+// Keep the existing NVS record and View IDs; these are UI-only subpages.
+int settingsGroup = 0;  // root, Display, GPS & Time, Behavior, Diagnostics, Power
+int settingsEdit = -1, settingsChoice = -1;
+bool settingsResetConfirm = false;
+String settingsNotice;
+const char* const kSettingsGroups[] = {"SETTINGS", "DISPLAY", "GPS & TIME", "BEHAVIOR", "DIAGNOSTICS", "POWER"};
+const char* const kSettingsNames[] = {"SCREEN SLEEP", "BRIGHTNESS", "GPS BAUD", "BOOT SPLASH", "ACTIVE CONFIRM", "RAW NMEA"};
 char attackConfirmLabel[24] = {};
 uint32_t attackConfirmMs = 0;
 
@@ -95,7 +75,7 @@ void drawConfirmBanner() {
   }
   display.setTextSize(1);
   display.setTextColor(kBad, kBackground);
-  display.setCursor(6, 250);
+  display.setCursor(6, 258);
   display.print("Tap again: ");
   display.print(attackConfirmLabel);
 }
@@ -234,139 +214,267 @@ void toggleSettingFlag(uint8_t bit) {
   saveDeviceSettings();
 }
 
-String settingsItemLabel(uint8_t item) {
-  switch (item) {
-    case kItemSleep:
-      return String("Sleep  ") +
-             backlightTimeoutLabel(deviceSettings.backlightTimeoutMs);
-    case kItemBright:
-      return "Bright  " + String(deviceSettings.brightnessPercent) + "%";
-    case kItemGps:
-      return "GPS  " + String(deviceSettings.gpsBaud);
-    case kItemSplash:
-      return settingFlag(kSettingSkipSplash) ? "Splash  Off" : "Splash  On";
-    case kItemActive:
-      return settingFlag(kSettingConfirmAttacks) ? "Active  Confirm"
-                                                 : "Active  Instant";
-    case kItemNmea:
-      return settingFlag(kSettingNmeaEcho) ? "NMEA  On" : "NMEA  Off";
-    case kItemCapacity:
-      return "Batt  " + String(deviceSettings.batteryCapacityMah) + "mAh";
-    case kItemTune:
-      return "Batt Tune  " + String(deviceSettings.batteryTunePercent) + "%";
-    default:
-      return "Screen test";
-  }
+String settingsValueLabel(int item) {
+  if (item == 0) return deviceSettings.backlightTimeoutMs ? String(backlightTimeoutLabel(deviceSettings.backlightTimeoutMs)) : "Never";
+  if (item == 1) return String(deviceSettings.brightnessPercent) + "%";
+  if (item == 2) return String(deviceSettings.gpsBaud);
+  if (item == 3) return settingFlag(kSettingSkipSplash) ? "Skip" : "Show";
+  if (item == 4) return settingFlag(kSettingConfirmAttacks) ? "Confirm" : "Immediate";
+  return settingFlag(kSettingNmeaEcho) ? "On" : "Off";
 }
 
-void cycleBacklightTimeout() {
-  int index = 0;
-  for (int i = 0; i < kBacklightTimeoutOptionCount; ++i) {
-    if (kBacklightTimeoutOptions[i] == deviceSettings.backlightTimeoutMs) {
-      index = i;
-      break;
-    }
-  }
-  deviceSettings.backlightTimeoutMs =
-      kBacklightTimeoutOptions[(index + 1) % kBacklightTimeoutOptionCount];
-  noteActivity();
-  setBacklightLit(true);
-  saveDeviceSettings();
+int settingsChoiceCount(int item) {
+  if (item == 0) return kBacklightTimeoutOptionCount;
+  if (item == 1) return kBrightnessOptionCount;
+  if (item == 2) return kGpsBaudOptionCount;
+  return 2;
 }
 
-void cycleBrightness() {
-  int index = kBrightnessOptionCount - 1;
-  for (int i = 0; i < kBrightnessOptionCount; ++i) {
-    if (kBrightnessOptions[i] == deviceSettings.brightnessPercent) {
-      index = i;
-      break;
-    }
-  }
-  deviceSettings.brightnessPercent =
-      kBrightnessOptions[(index + 1) % kBrightnessOptionCount];
-  noteActivity();
-  setBacklightLit(true);
-  saveDeviceSettings();
+String settingsChoiceLabel(int item, int choice) {
+  if (item == 0) return choice == 0 ? "Never" : String(backlightTimeoutLabel(kBacklightTimeoutOptions[choice]));
+  if (item == 1) return String(kBrightnessOptions[choice]) + "%";
+  if (item == 2) return String(kGpsBaudOptions[choice]);
+  if (item == 3) return choice == 0 ? "Show at startup" : "Skip at startup";
+  if (item == 4) return choice == 0 ? "Require second tap" : "Start immediately";
+  return choice == 0 ? "Off" : "On / USB Serial";
 }
 
-void cycleBatteryCapacity() {
-  int index = 0;
+int settingsCurrentChoice(int item) {
+  if (item >= 3) {
+    if (item == 3) return settingFlag(kSettingSkipSplash) ? 1 : 0;
+    if (item == 4) return settingFlag(kSettingConfirmAttacks) ? 0 : 1;
+    return settingFlag(kSettingNmeaEcho) ? 1 : 0;
+  }
+  for (int i = 0; i < settingsChoiceCount(item); ++i) {
+    if (item == 0 && deviceSettings.backlightTimeoutMs == kBacklightTimeoutOptions[i]) return i;
+    if (item == 1 && deviceSettings.brightnessPercent == kBrightnessOptions[i]) return i;
+    if (item == 2 && deviceSettings.gpsBaud == kGpsBaudOptions[i]) return i;
+  }
+  return -1;  // retain a valid non-preset value until an explicit choice is made
+}
+
+void beginSettingsEdit(int item) {
+  if (item < 0 || item > 5) return;
+  settingsEdit = item;
+  settingsChoice = settingsCurrentChoice(item);
+  settingsNotice = "";
+  drawSettings();
+}
+
+void applySettingsChoice() {
+  if (settingsEdit < 0 || settingsEdit > 5 || settingsChoice < 0 ||
+      settingsChoice >= settingsChoiceCount(settingsEdit)) return;
+  if (settingsEdit == 0) deviceSettings.backlightTimeoutMs = kBacklightTimeoutOptions[settingsChoice];
+  else if (settingsEdit == 1) deviceSettings.brightnessPercent = kBrightnessOptions[settingsChoice];
+  else if (settingsEdit == 2) {
+    if (deviceSettings.gpsBaud != kGpsBaudOptions[settingsChoice])
+      applyGpsBaud(kGpsBaudOptions[settingsChoice], false);
+  }
+  else if (settingsEdit == 3) setSettingFlag(kSettingSkipSplash, settingsChoice == 1);
+  else if (settingsEdit == 4) {
+    setSettingFlag(kSettingConfirmAttacks, settingsChoice == 0);
+    attackConfirmLabel[0] = 0;
+  } else {
+    setSettingFlag(kSettingNmeaEcho, settingsChoice == 1);
+    gpsRawEcho = settingFlag(kSettingNmeaEcho);
+  }
+  if (settingsEdit <= 1) { noteActivity(); setBacklightLit(true); }
+  const bool saved = saveDeviceSettings();
+  settingsNotice = saved ? "Saved on this device." : "RAM only. Retry save from Settings.";
+  settingsEdit = -1;
+  drawSettings();
+}
+
+bool settingsHit(int x, int y, int left, int top, int width, int height) {
+  return x >= left && x < left + width && y >= top && y < top + height;
+}
+
+void stepBatteryCapacity(int dir) {
+  int idx = 0;
   for (int i = 0; i < kBatteryCapacityOptionCount; ++i) {
-    if (kBatteryCapacityOptions[i] == deviceSettings.batteryCapacityMah) {
-      index = i;
-      break;
-    }
+    if (kBatteryCapacityOptions[i] == deviceSettings.batteryCapacityMah) idx = i;
   }
-  deviceSettings.batteryCapacityMah =
-      kBatteryCapacityOptions[(index + 1) % kBatteryCapacityOptionCount];
+  idx = (idx + dir + kBatteryCapacityOptionCount) % kBatteryCapacityOptionCount;
+  const uint16_t next = kBatteryCapacityOptions[idx];
+  if (next == deviceSettings.batteryCapacityMah) return;
+  deviceSettings.batteryCapacityMah = next;
   resetBatteryEstimate();
-  saveDeviceSettings();
+  const bool saved = saveDeviceSettings();
+  settingsNotice = saved ? "Capacity set. Gauge reset." : "RAM only. Retry save.";
 }
 
-void cycleBatteryTune() {
-  int index = 0;
+void stepBatteryTune(int dir) {
+  int idx = 10;
   for (int i = 0; i < kBatteryTuneOptionCount; ++i) {
-    if (kBatteryTuneOptions[i] == deviceSettings.batteryTunePercent) {
-      index = i;
-      break;
-    }
+    if (kBatteryTuneOptions[i] == deviceSettings.batteryTunePercent) idx = i;
   }
-  deviceSettings.batteryTunePercent =
-      kBatteryTuneOptions[(index + 1) % kBatteryTuneOptionCount];
-  saveDeviceSettings();
+  idx = (idx + dir + kBatteryTuneOptionCount) % kBatteryTuneOptionCount;
+  deviceSettings.batteryTunePercent = kBatteryTuneOptions[idx];
+  const bool saved = saveDeviceSettings();
+  settingsNotice = saved ? "Tune saved." : "RAM only. Retry save.";
 }
 
-void handleSettingsItem(uint8_t item) {
-  switch (item) {
-    case kItemSleep: cycleBacklightTimeout(); drawSettings(); break;
-    case kItemBright: cycleBrightness(); drawSettings(); break;
-    case kItemGps: cycleGpsBaud(); drawSettings(); break;
-    case kItemSplash: toggleSettingFlag(kSettingSkipSplash); drawSettings(); break;
-    case kItemActive: toggleSettingFlag(kSettingConfirmAttacks); drawSettings(); break;
-    case kItemNmea: toggleSettingFlag(kSettingNmeaEcho); drawSettings(); break;
-    case kItemCapacity: cycleBatteryCapacity(); drawSettings(); break;
-    case kItemTune: cycleBatteryTune(); drawSettings(); break;
-    default: startScreenTest(); break;
-  }
+void openSettings() {
+  settingsGroup = 0;
+  settingsEdit = -1;
+  settingsResetConfirm = false;
+  settingsNotice = "";
+  drawSettings();
 }
 
 void drawSettings() {
   currentView = View::kSettings;
   display.fillScreen(kBackground);
-  String detail = String(settingsPage + 1) + "/" + String(kSettingsPageCount) +
-                  (lastSettingsWriteOk ? "  stored" : "  RAM only");
-  drawHeader("SETTINGS", detail);
-  int count = 0;
-  const uint8_t* items = settingsPageItems(settingsPage, count);
-  for (int row = 0; row < count; ++row) {
-    drawSmallButton(20, kSettingsRow0 + row * kSettingsPitch, 200, kSettingsRowH,
-                    settingsItemLabel(items[row]), kAccent);
+  const char* title = settingsResetConfirm ? "RESET SETTINGS?" : settingsEdit >= 0 ? kSettingsNames[settingsEdit] : kSettingsGroups[settingsGroup];
+  drawHeader(title, lastSettingsWriteOk ? (settingsEdit >= 0 ? "choose a value, then Save" : "stored on this device") : "SAVE FAILED - changes in RAM only");
+  display.setTextSize(1); display.setTextColor(kMuted, kBackground);
+  if (settingsResetConfirm) {
+    display.setCursor(8, 54); display.print("Restore device preferences:");
+    display.setCursor(8, 80); display.print("Brightness 100% / screen sleep Never");
+    display.setCursor(8, 96); display.print("GPS baud " + String(AwokPins::kGpsBaud));
+    display.setCursor(8, 112); display.print("Splash Show / active tools Immediate");
+    display.setCursor(8, 128); display.print("Raw NMEA Off");
+    display.setCursor(8, 146); display.print("Keeps saved networks, files,");
+    display.setCursor(8, 160); display.print("and the GPS-selected timezone.");
+    drawSmallButton(8, 176, 224, 44, "Restore defaults", kBad);
+    drawSmallButton(4, 280, 232, 36, "Cancel", kMuted);
+    return;
   }
-  drawFourButtonFooter("Back", "<", ">", "Defaults");
+  if (settingsEdit >= 0) {
+    display.setCursor(8, 52); display.print("Current: " + settingsValueLabel(settingsEdit));
+    display.setCursor(8, 70); display.print("Changes apply only when you Save.");
+    const int count = settingsChoiceCount(settingsEdit);
+    for (int i = 0; i < count; ++i) {
+      const int x = count > 2 ? 8 + (i % 2) * 116 : 8;
+      const int y = 102 + (count > 2 ? i / 2 : i) * 54;
+      drawSmallButton(x, y, count > 2 ? 108 : 224, 44,
+          String(i == settingsChoice ? "> " : "") + settingsChoiceLabel(settingsEdit, i),
+          i == settingsChoice ? kGood : kAccent);
+    }
+    drawSmallButton(4, 280, 112, 36, "Cancel", kMuted);
+    if (settingsChoice >= 0) drawSmallButton(124, 280, 112, 36, "Save", kAccent);
+    return;
+  }
+  if (settingsGroup == 0) {
+    for (int i = 1; i <= 5; ++i)
+      drawSmallButton(8, 44 + (i - 1) * 38, 224, 34, kSettingsGroups[i], kAccent);
+    drawSmallButton(8, 240, 224, 34, "Restore defaults...", kWarn);
+  } else if (settingsGroup == 1) {
+    drawSmallButton(8, 52, 224, 44, "Screen sleep: " + settingsValueLabel(0), kAccent);
+    drawSmallButton(8, 104, 224, 44, "Brightness: " + settingsValueLabel(1), kAccent);
+    drawSmallButton(8, 156, 224, 44, "Boot splash: " + settingsValueLabel(3), kAccent);
+  } else if (settingsGroup == 2) {
+    drawSmallButton(8, 52, 224, 44, "GPS baud: " + settingsValueLabel(2), kAccent);
+    display.setTextColor(kAccent, kBackground);
+    display.setCursor(8, 118); display.print("TIMEZONE / DST: AUTOMATIC FROM GPS");
+    display.setTextColor(gpsHasFix() ? kGood : kWarn, kBackground);
+    display.setCursor(8, 138); display.print(gpsReceptionLabel());
+    display.setTextColor(ILI9341_WHITE, kBackground);
+    display.setCursor(8, 158); display.print(gpsTimestamp());
+    display.setCursor(8, 174); display.print(gpsTimezoneLabel());
+    display.setTextColor(kMuted, kBackground);
+    display.setCursor(8, 194); display.print(gpsLocalZone >= 0 ? clipped(String(AwokTime::kZones[gpsLocalZone].name), 37) : "Waiting for GPS location.");
+    display.setCursor(8, 214); display.print("Last known zone survives fix loss.");
+  } else if (settingsGroup == 3) {
+    drawSmallButton(8, 52, 224, 44, "Active tools: " + settingsValueLabel(4), kAccent);
+    display.setTextColor(kMuted, kBackground);
+    display.setCursor(8, 124); display.print("Choose whether active tools need");
+    display.setCursor(8, 140); display.print("a second tap before starting.");
+  } else if (settingsGroup == 4) {
+    drawSmallButton(8, 52, 224, 44, "GPS receiver diagnostics", kAccent);
+    drawSmallButton(8, 104, 224, 44, "Raw NMEA: " + settingsValueLabel(5), kAccent);
+    drawSmallButton(8, 156, 224, 44, "Screen / input test", kAccent);
+    display.setTextColor(kMuted, kBackground);
+    display.setCursor(8, 224); display.print("Raw GPS sentences go to USB Serial.");
+  } else {
+    display.setTextSize(1); display.setTextColor(kAccent, kBackground);
+    display.setCursor(8, 54); display.print("BATTERY CAPACITY");
+    drawSmallButton(8, 72, 68, 44, "-", kAccent);
+    drawSmallButton(164, 72, 68, 44, "+", kAccent);
+    display.setTextColor(ILI9341_WHITE, kBackground);
+    display.setCursor(88, 90); display.print(String(deviceSettings.batteryCapacityMah) + " mAh");
+    display.setTextColor(kAccent, kBackground);
+    display.setCursor(8, 140); display.print("CALIBRATION TUNE");
+    drawSmallButton(8, 158, 68, 44, "-", kAccent);
+    drawSmallButton(164, 158, 68, 44, "+", kAccent);
+    display.setTextColor(ILI9341_WHITE, kBackground);
+    display.setCursor(98, 176); display.print(String(deviceSettings.batteryTunePercent) + " %");
+    display.setTextColor(kMuted, kBackground);
+    display.setCursor(8, 224); display.print("Capacity change resets the gauge.");
+  }
+  display.setTextSize(1); display.setTextColor(lastSettingsWriteOk ? kMuted : kWarn, kBackground);
+  display.setCursor(8, 268); display.print(clipped(settingsNotice, 37));
+  drawSmallButton(4, 280, 112, 36, "Back", kMuted);
+  drawSmallButton(124, 280, 112, 36, lastSettingsWriteOk ? "Home" : "Retry save", kAccent);
 }
 
 void handleSettingsTouch(int x, int y) {
-  if (y >= kFooterTop) {
-    if (x < 60) {
-      drawStatus();
-    } else if (x < 120) {
-      settingsPage = (settingsPage + kSettingsPageCount - 1) % kSettingsPageCount;
-      drawSettings();
-    } else if (x < 180) {
-      settingsPage = (settingsPage + 1) % kSettingsPageCount;
-      drawSettings();
-    } else {
+  if (settingsResetConfirm) {
+    if (settingsHit(x, y, 4, 280, 232, 36)) settingsResetConfirm = false;
+    else if (settingsHit(x, y, 8, 176, 224, 44)) {
       resetDeviceSettings();
-      settingsPage = 0;
-      drawSettings();
+      settingsResetConfirm = false;
+      settingsNotice = lastSettingsWriteOk ? "Defaults restored." : "Defaults in RAM only. Retry save.";
+    } else return;
+    drawSettings(); return;
+  }
+  if (settingsEdit >= 0) {
+    if (settingsHit(x, y, 4, 280, 112, 36)) { settingsEdit = -1; drawSettings(); return; }
+    if (settingsHit(x, y, 124, 280, 112, 36)) { applySettingsChoice(); return; }
+    const int count = settingsChoiceCount(settingsEdit);
+    for (int i = 0; i < count; ++i) {
+      const int left = count > 2 ? 8 + (i % 2) * 116 : 8;
+      const int top = 102 + (count > 2 ? i / 2 : i) * 54;
+      if (settingsHit(x, y, left, top, count > 2 ? 108 : 224, 44)) {
+        settingsChoice = i; drawSettings(); return;
+      }
     }
     return;
   }
-  if (y < kSettingsRow0) return;
-  const int row = (y - kSettingsRow0) / kSettingsPitch;
-  if ((y - kSettingsRow0) % kSettingsPitch >= kSettingsRowH) return;
-  int count = 0;
-  const uint8_t* items = settingsPageItems(settingsPage, count);
-  if (row < 0 || row >= count) return;
-  handleSettingsItem(items[row]);
+  if (settingsHit(x, y, 4, 280, 112, 36)) {
+    if (settingsGroup == 0) drawHome();  // Settings is a Home destination now
+    else { settingsGroup = 0; settingsNotice = ""; drawSettings(); }
+    return;
+  }
+  if (settingsHit(x, y, 124, 280, 112, 36)) {
+    if (lastSettingsWriteOk) drawHome();
+    else { saveDeviceSettings(); settingsNotice = lastSettingsWriteOk ? "Saved on this device." : "Save failed. Changes remain in RAM."; drawSettings(); }
+    return;
+  }
+  if (settingsGroup == 0) {
+    for (int group = 1; group <= 5; ++group) {
+      if (settingsHit(x, y, 8, 44 + (group - 1) * 38, 224, 34)) {
+        settingsGroup = group; settingsNotice = ""; drawSettings(); return;
+      }
+    }
+    if (settingsHit(x, y, 8, 240, 224, 34)) { settingsResetConfirm = true; drawSettings(); }
+    return;
+  }
+  if (settingsGroup == 1) {
+    if (settingsHit(x, y, 8, 52, 224, 44)) beginSettingsEdit(0);
+    else if (settingsHit(x, y, 8, 104, 224, 44)) beginSettingsEdit(1);
+    else if (settingsHit(x, y, 8, 156, 224, 44)) beginSettingsEdit(3);
+  } else if (settingsGroup == 2) {
+    if (settingsHit(x, y, 8, 52, 224, 44)) beginSettingsEdit(2);
+  } else if (settingsGroup == 3) {
+    if (settingsHit(x, y, 8, 52, 224, 44)) beginSettingsEdit(4);
+  } else if (settingsGroup == 4) {
+    if (settingsHit(x, y, 8, 52, 224, 44)) { gpsDiagnosticsFromSettings = true; drawGpsDiagnostics(); }
+    else if (settingsHit(x, y, 8, 104, 224, 44)) beginSettingsEdit(5);
+    else if (settingsHit(x, y, 8, 156, 224, 44)) startScreenTest();
+  } else {
+    if (settingsHit(x, y, 8, 72, 68, 44)) { stepBatteryCapacity(-1); drawSettings(); }
+    else if (settingsHit(x, y, 164, 72, 68, 44)) { stepBatteryCapacity(1); drawSettings(); }
+    else if (settingsHit(x, y, 8, 158, 68, 44)) { stepBatteryTune(-1); drawSettings(); }
+    else if (settingsHit(x, y, 164, 158, 68, 44)) { stepBatteryTune(1); drawSettings(); }
+  }
+}
+
+void updateSettingsPage() {
+  // Refresh the automatic time summary without resetting a pending choice.
+  static uint32_t lastDrawMs = 0;
+  if (currentView != View::kSettings || settingsGroup != 2 || settingsEdit >= 0 ||
+      settingsResetConfirm || millis() - lastDrawMs < 1000) return;
+  lastDrawMs = millis();
+  drawSettings();
 }

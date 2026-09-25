@@ -21,6 +21,22 @@ static std::atomic<uint32_t> linkFileWaitingToken{0};
 // Channel the split scanner is currently dwelling on (reported in TELEM). Local
 // to this tab; every link.ino function is defined after it.
 static uint8_t linkScanChannel = 0;
+#ifdef AWOK_HEADLESS
+static AxdWardriveStatusMsg bridgeWardriveStatus;
+static portMUX_TYPE bridgeWardriveStatusMux = portMUX_INITIALIZER_UNLOCKED;
+static bool bridgeWardriveStatusPending = false;
+
+void bridgeServiceWardriveDashboard() {
+  AxdWardriveStatusMsg msg;
+  bool pending;
+  portENTER_CRITICAL(&bridgeWardriveStatusMux);
+  pending = bridgeWardriveStatusPending;
+  if (pending) { msg = bridgeWardriveStatus; bridgeWardriveStatusPending = false; }
+  portEXIT_CRITICAL(&bridgeWardriveStatusMux);
+  if (pending) bridgeNotifyResult(kSourceWardriveStatus,
+      reinterpret_cast<const uint8_t*>(msg.data), strnlen(msg.data, sizeof(msg.data)));
+}
+#endif
 
 // ---- ESP-NOW plumbing ---------------------------------------------------
 
@@ -49,6 +65,17 @@ void onLinkRecv(const esp_now_recv_info_t* info, const uint8_t* data, int len) {
     return;
   }
 #ifdef AWOK_HEADLESS
+  if (type == kLinkMsgWardriveStatus && len == sizeof(AxdWardriveStatusMsg)) {
+    AxdWardriveStatusMsg msg;
+    memcpy(&msg, data, sizeof(msg));
+    if (msg.version != kLinkProtoVersion) return;
+    msg.data[sizeof(msg.data) - 1] = 0;
+    portENTER_CRITICAL(&bridgeWardriveStatusMux);
+    bridgeWardriveStatus = msg;
+    bridgeWardriveStatusPending = true;
+    portEXIT_CRITICAL(&bridgeWardriveStatusMux);
+    return;
+  }
   if (type == kLinkMsgFileChunk && len == static_cast<int>(sizeof(AxdFileChunkMsg))) {
     AxdFileChunkMsg chunk;
     memcpy(&chunk, data, sizeof(chunk));
@@ -62,6 +89,9 @@ void onLinkRecv(const esp_now_recv_info_t* info, const uint8_t* data, int len) {
       linkReliableFileActive()) {
     LinkPacket command;
     memcpy(&command, data, sizeof(command));
+    if (command.version == kLinkProtoVersion &&
+        static_cast<uint8_t>(command.reserved) == kAxdCmdFileGetVerified &&
+        !linkReliableFileTokenMatches(command.sessionId)) linkAbortFileStream();
     if (command.version == kLinkProtoVersion &&
         static_cast<uint8_t>(command.reserved) == kAxdCmdFileAbort) {
       linkAbortFileStream();
@@ -1072,10 +1102,13 @@ void linkHandlePacket(const LinkQueueItem& item) {
       lastCmdSeq = p.code;
       const uint8_t op = static_cast<uint8_t>(p.reserved & 0xFF);
       const bool fileReply = op == kAxdCmdFileList || op == kAxdCmdFileGet ||
-                             op == kAxdCmdFileGetReliable || op == kAxdCmdFileDelete;
+                             op == kAxdCmdFileGetReliable || op == kAxdCmdFileGetVerified || op == kAxdCmdFileDelete;
       if (fileReply && (p.flags & kLinkCommandWaitFileReady) &&
           (p.sessionId == 0 || !linkWaitForFileReceiver(p))) return;
-      if (op == kAxdCmdFileGetReliable) {
+      if (op == kAxdCmdFileGetVerified) {
+        if (p.sessionId != 0) linkStreamFileVerified(static_cast<uint8_t>(p.reserved >> 8),
+            p.sessionId, p.masterMillis, p.networks, p.bleCount);
+      } else if (op == kAxdCmdFileGetReliable) {
         if (p.sessionId != 0) linkStreamFileReliable(static_cast<uint8_t>(p.reserved >> 8), p.sessionId);
       } else {
         linkDispatchCommand(op, static_cast<uint8_t>(p.reserved >> 8));
@@ -1316,6 +1349,7 @@ static void linkToolCounters(uint32_t& a, uint32_t& b) {
 }
 
 void linkBroadcastStatus() {
+  broadcastWardriveDashboard();
   const bool wardriving = wardriveActive || linkWardriveActive || fleetWardriveOn ||
                           (currentView == View::kWardrive) || (currentView == View::kLinkWardrive);
   uint32_t nets = wardriving
@@ -1583,6 +1617,7 @@ void startLinkWardrive() {
   wardriveScans = 0;
   wardriveResetDedup();
   wardriveStartMs = millis();
+  resetWardriveSessionStats(true);
   linkChannelCursor = 0;
   linkInWindow = false;
   linkWindowScanStopped = false;
@@ -1776,6 +1811,7 @@ void updateLink() {
 // ---- UI ------------------------------------------------------------------
 
 void openLinkWardrive() {
+  fleetMenuOpen = false;  // explicit Split entry; active Fleet still owns its screen
   currentView = View::kLinkWardrive;
   linkEnsureEspNow();  // state shown even if it fails
   drawLinkWardrive();
@@ -1794,30 +1830,17 @@ static const char* fleetRoleLabel(int idx) {
 void drawFleetMenu() {
   currentView = View::kLinkWardrive;
   display.fillScreen(kBackground);
-  drawHeader("FLEET", "multi-node wardrive");
-  display.setTextSize(2);
-  display.setTextColor(kAccent, kBackground);
-  display.setCursor(6, 54);
-  display.print("FLEET");
-  display.setTextSize(1);
-  display.setTextColor(ILI9341_WHITE, kBackground);
-  display.setCursor(6, 88);
-  display.print("Link several AxD chips to split");
-  display.setCursor(6, 100);
-  display.print("the channels into ONE merged CSV.");
+  drawHeader("FLEET", linkEspNowReady ? "choose a role" : "ESP-NOW unavailable");
+  display.setTextSize(1); display.setTextColor(ILI9341_WHITE, kBackground);
+  display.setCursor(8, 52); display.print("One coordinator owns the merged CSV.");
+  display.setCursor(8, 66); display.print("Workers share Wi-Fi / BLE scanning.");
+  drawSmallButton(8, 100, 224, 44, "Start as coordinator", kAccent);
   display.setTextColor(kMuted, kBackground);
-  display.setCursor(6, 124);
-  display.print("Start - be the coordinator; others");
-  display.setCursor(6, 136);
-  display.print("        join and it deals the plan.");
-  display.setCursor(6, 152);
-  display.print("Join  - listen for a coordinator's");
-  display.setCursor(6, 164);
-  display.print("        invite and auto-join it.");
-  display.setTextColor(linkEspNowReady ? kGood : kBad, kBackground);
-  display.setCursor(6, 188);
-  display.print(linkEspNowReady ? "ESP-NOW ready" : "ESP-NOW unavailable");
-  drawThreeButtonFooter("Back", "Start", "Join");
+  display.setCursor(8, 152); display.print("Create a fleet and begin wardriving.");
+  drawSmallButton(8, 184, 224, 44, "Join as worker", kAccent);
+  display.setCursor(8, 236); display.print("Wait for a coordinator to invite you.");
+  drawSmallButton(4, 280, 112, 36, "Back", kMuted);
+  drawSmallButton(124, 280, 112, 36, "Home", kAccent);
 }
 
 // Live fleet view: session code, members + roles + row counts, aggregate.
@@ -1844,6 +1867,9 @@ void drawFleetStatus() {
     return;
   }
 
+#ifdef AWOK_MINI_DISPLAY
+  drawWardriveDashboardBody(String(fleetMemberCount) + " nodes | " + (fleetCoordinator ? "coordinator" : "worker"));
+#else
   display.setTextSize(1);
   display.setTextColor(kMuted, kBackground);
   display.setCursor(6, 46);
@@ -1858,7 +1884,7 @@ void drawFleetStatus() {
   display.setTextSize(1);
   display.setTextColor(fleetWardriveOn ? kGood : kWarn, kBackground);
   display.setCursor(120, 52);
-  display.print(fleetWardriveOn ? (gpsHasFix() ? "LOGGING" : "NO FIX") : "READY");
+  display.print(fleetWardriveOn ? (wardriveStorageState() == 3 ? "SD ERROR" : gpsHasFix() ? "RUNNING" : "NO FIX") : "READY");
   display.setTextColor(ILI9341_WHITE, kBackground);
   display.setCursor(120, 68);
   display.printf("Nodes: %d", fleetMemberCount);
@@ -1880,9 +1906,21 @@ void drawFleetStatus() {
   display.printf("Agg: %lu wifi  %lu ble",
                  static_cast<unsigned long>(wardriveNetworks),
                  static_cast<unsigned long>(wardriveBleCount));
+  display.setTextColor(ILI9341_WHITE, kBackground);
+  display.setCursor(6, 186); display.print(gpsTimestamp());
+  display.setCursor(6, 200);
+  display.printf("%s %.2fkm %lu/min", wardriveElapsedText().c_str(), wardriveStats.distanceM / 1000.0,
+                 (unsigned long)wardriveStats.perMinute());
+  display.setCursor(6, 214);
+  display.printf("GPS %d sat | fix %u%% | %s", gpsSats(), wardriveStats.fixPercent(), gpsHasFix() ? "OK" : "LOST");
+  display.setTextColor(wardriveStorageState() == 3 || wardriveStorageState() == 0 ? kBad : kGood, kBackground);
+  display.setCursor(6, 230); display.print(wardriveRecordingLabel());
+  display.setCursor(6, 244);
+  if (fleetCoordinator) display.printf("SD %lu rows | flushed %lu", (unsigned long)wardriveStats.rows, (unsigned long)wardriveStats.flushedRows);
+  else display.print("Merged CSV lives on coordinator");
   display.setTextColor(kMuted, kBackground);
-  display.setCursor(6, y + 22);
-  display.print("CSV -> SD + phone (merged).");
+  display.setCursor(6, 260); display.print(gpsTimezoneLabel());
+#endif
 
   if (fleetCoordinator) {
     drawThreeButtonFooter("Home", "Leave", fleetWardriveOn ? "Stop" : "Go");
@@ -1900,58 +1938,11 @@ void drawLinkWardrive() {
   if (linkWardriveActive) {
     const bool paired = linkState == kLinkReady;
     drawHeader("SPLIT WD", paired ? "linked drive" : "solo (unpaired)");
-    display.setTextSize(2);
-    display.setTextColor(gpsHasFix() ? kGood : kWarn, kBackground);
-    display.setCursor(6, 52);
-    display.print(gpsHasFix() ? "LOGGING" : "NO FIX");
-
-    display.setTextSize(1);
-    display.setTextColor(ILI9341_WHITE, kBackground);
-    display.setCursor(6, 86);
-    display.printf("Mine:    %lu APs", static_cast<unsigned long>(wardriveNetworks));
-    display.setCursor(6, 98);
-    if (paired) {
-      display.printf("Partner: %lu APs", static_cast<unsigned long>(linkPartnerNetworks));
-      display.setTextColor(kAccent, kBackground);
-      display.setCursor(6, 110);
-      display.printf("Combined: %lu APs",
-                     static_cast<unsigned long>(wardriveNetworks + linkPartnerNetworks));
-    } else {
-      display.print("Partner: --");
-    }
-
-    display.setTextColor(kMuted, kBackground);
-    display.setCursor(6, 130);
-    display.printf("My ch %d (%d of %d)  scans %lu", linkScanChannel,
-                   linkAssignedChannelCount(), linkPlanCount(),
-                   static_cast<unsigned long>(wardriveScans));
-    if (paired) {
-      display.setCursor(6, 142);
-      display.printf("Role: %s  Partner ch %d",
-                     linkRoleMaster ? "master" : "slave", linkPartnerChannel);
-    }
-
-    if (paired) {
-      const bool lost = millis() - linkPartnerLastSeenMs > kLinkPeerTimeoutMs;
-      display.setTextColor(lost ? kBad : kGood, kBackground);
-      display.setCursor(6, 162);
-      if (lost) {
-        display.print("PARTNER LOST - out of range?");
-      } else {
-        display.printf("Partner link %d dBm", linkPartnerRssi);
-      }
-    }
-
-    display.setTextColor(kMuted, kBackground);
-    display.setCursor(6, 182);
-    display.printf("Session %lu", static_cast<unsigned long>(linkSessionId));
-    display.setTextColor(wardriveCsvReady ? kAccent : kWarn, kBackground);
-    display.setCursor(6, 196);
-    if (wardriveCsvReady) display.print("SD: " + wardriveCsvName());
-    else display.print("SD unavailable; not logging");
-    display.setTextColor(kMuted, kBackground);
-    display.setCursor(6, 216);
-    display.print("Wi-Fi only in Link mode (no BLE).");
+    String context;
+    if (!paired) context = "Solo | ch " + String(linkScanChannel) + " | Wi-Fi only";
+    else if (millis() - linkPartnerLastSeenMs > kLinkPeerTimeoutMs) context = "PARTNER LOST | scanning continues";
+    else context = "Peer " + String(linkPartnerNetworks) + " AP | " + String(linkPartnerRssi) + "dBm | ch " + String(linkScanChannel);
+    drawWardriveDashboardBody(context);
     drawFooter("Stop", "Home");
     return;
   }
@@ -1979,7 +1970,8 @@ void drawLinkWardrive() {
     display.setCursor(6, 188);
     display.printf("You are the %s (lower MAC wins).",
                    linkRoleMaster ? "master" : "slave");
-    drawFooter("Cancel", "Confirm");
+    drawSmallButton(4, 280, 112, 36, "Cancel", kMuted);
+    drawSmallButton(124, 280, 112, 36, "Confirm", kAccent);
     return;
   }
 
@@ -2000,7 +1992,7 @@ void drawLinkWardrive() {
     display.print("A 4-digit code appears once they");
     display.setCursor(6, 146);
     display.print("find each other.");
-    drawFooter("Cancel", "Cancel");
+    drawSmallButton(4, 280, 232, 36, "Cancel pairing", kMuted);
     return;
   }
 
@@ -2024,30 +2016,70 @@ void drawLinkWardrive() {
     display.print("Start launches the split wardrive.");
     display.setCursor(6, 156);
     display.print("Each unit logs its own WiGLE CSV.");
-    drawThreeButtonFooter("Back", "Unpair", "Start");
+    drawSmallButton(8, 216, 224, 44, "Start split wardrive", kAccent);
+    drawSmallButton(4, 280, 112, 36, "Back", kMuted);
+    drawSmallButton(124, 280, 112, 36, "Unpair", kWarn);
     return;
   }
 
-  // kLinkOff — unpaired idle.
-  drawHeader("LINK", linkEspNowReady ? "two-unit mode" : "ESP-NOW unavailable");
-  display.setTextSize(2);
-  display.setTextColor(kAccent, kBackground);
-  display.setCursor(6, 54);
-  display.print("LINK MODE");
-  display.setTextSize(1);
-  display.setTextColor(ILI9341_WHITE, kBackground);
-  display.setCursor(6, 86);
-  display.print("Pair with a second AxD to");
-  display.setCursor(6, 98);
-  display.print("split-channel wardrive together.");
+  // kLinkOff — unpaired Split setup. Pairing remains separate from Fleet.
+  drawHeader("SPLIT", linkEspNowReady ? "two boards / separate CSVs" : "ESP-NOW unavailable");
+  display.setTextSize(1); display.setTextColor(ILI9341_WHITE, kBackground);
+  display.setCursor(8, 52); display.print("Pair two boards to divide Wi-Fi");
+  display.setCursor(8, 66); display.print("channels. Each board uses its GPS.");
+  drawSmallButton(8, 100, 224, 44, "Pair boards", kAccent);
   display.setTextColor(kMuted, kBackground);
-  display.setCursor(6, 122);
-  display.print("Fleet - link 2+ chips, one CSV");
-  display.setCursor(6, 134);
-  display.print("Solo  - wardrive all channels now");
-  display.setCursor(6, 158);
-  display.print("A fleet splits the channel plan N");
-  display.setCursor(6, 170);
-  display.print("ways so you cover the band faster.");
-  drawThreeButtonFooter("Back", "Fleet", "Solo");
+  display.setCursor(8, 152); display.print("Confirm the same code on both units.");
+  drawSmallButton(8, 184, 224, 44, "Wi-Fi only / unpaired", kAccent);
+  display.setCursor(8, 236); display.print("For Wi-Fi + BLE, choose Solo mode.");
+  drawSmallButton(4, 280, 112, 36, "Back", kMuted);
+  drawSmallButton(124, 280, 112, 36, "Home", kAccent);
+}
+
+void handleLinkWardriveTouch(int x, int y) {
+  if (fleetActive || fleetListening) {
+    // Existing active-session semantics: Home leaves Fleet running; Leave exits.
+    if (fleetCoordinator && !(fleetListening && !fleetActive)) {
+      if (gpsMenuHit(x, y, 4, 284, 72, 30)) drawHome();
+      else if (gpsMenuHit(x, y, 84, 284, 72, 30)) { fleetLeave(); openDriveMenu(); }
+      else if (gpsMenuHit(x, y, 164, 284, 72, 30)) {
+        if (fleetWardriveOn) fleetStopWardrive(); else fleetStartWardrive();
+        drawLinkWardrive();
+      }
+    } else {
+      if (gpsMenuHit(x, y, 4, 284, 112, 30)) { fleetLeave(); openDriveMenu(); }
+      else if (gpsMenuHit(x, y, 124, 284, 112, 30)) drawHome();
+    }
+    return;
+  }
+  if (fleetMenuOpen) {
+    if (gpsMenuHit(x, y, 8, 100, 224, 44)) { fleetStartWardrive(); drawLinkWardrive(); }
+    else if (gpsMenuHit(x, y, 8, 184, 224, 44)) { fleetArm(); drawLinkWardrive(); }
+    else if (gpsMenuHit(x, y, 4, 280, 112, 36)) { fleetMenuOpen = false; openDriveMenu(); }
+    else if (gpsMenuHit(x, y, 124, 280, 112, 36)) { fleetMenuOpen = false; drawHome(); }
+    return;
+  }
+  if (linkWardriveActive) {
+    if (gpsMenuHit(x, y, 4, 284, 112, 30)) { stopLinkWardrive(); drawLinkWardrive(); }
+    else if (gpsMenuHit(x, y, 124, 284, 112, 30)) { stopLinkWardrive(); drawHome(); }
+    return;
+  }
+  if (linkState == kLinkDiscovering) {
+    if (gpsMenuHit(x, y, 4, 280, 232, 36)) { linkCancelPairing(); drawLinkWardrive(); }
+    return;
+  }
+  if (linkState == kLinkAwaitConfirm) {
+    if (gpsMenuHit(x, y, 4, 280, 112, 36)) { linkCancelPairing(); drawLinkWardrive(); }
+    else if (gpsMenuHit(x, y, 124, 280, 112, 36)) linkConfirm();
+    return;
+  }
+  if (gpsMenuHit(x, y, 4, 280, 112, 36)) { openDriveMenu(); return; }
+  if (linkState == kLinkReady) {
+    if (gpsMenuHit(x, y, 8, 216, 224, 44)) startLinkWardrive();
+    else if (gpsMenuHit(x, y, 124, 280, 112, 36)) { linkUnpair(); drawLinkWardrive(); }
+  } else {
+    if (gpsMenuHit(x, y, 8, 100, 224, 44)) linkStartDiscovery();
+    else if (gpsMenuHit(x, y, 8, 184, 224, 44)) startLinkWardrive();
+    else if (gpsMenuHit(x, y, 124, 280, 112, 36)) drawHome();
+  }
 }

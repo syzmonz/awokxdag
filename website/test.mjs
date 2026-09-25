@@ -18,9 +18,70 @@ test('Remote UI parses source-prefixed fleet status per target', async () => {
 
 test('Remote wardrive export stays aligned with firmware WiGLE 1.6 rows', async () => {
   const html = await readFile(new URL('./public/control.html', import.meta.url), 'utf8');
-  assert.match(html, /WigleWifi-1\.6,appRelease=AxD,model=ESP32,release=1\.7\.0/);
+  assert.match(html, /WigleWifi-1\.6,appRelease=AxD,model=ESP32,release=1\.7\.5/);
   assert.match(html, /MAC,SSID,AuthMode,FirstSeen,Channel,Frequency,RSSI,CurrentLatitude,CurrentLongitude,AltitudeMeters,AccuracyMeters,RCOIs,MfgrId,Type/);
   assert.doesNotMatch(html, /WigleWifi_1\.4/);
+  // Fleet Hunter support
+  assert.match(html, /55:\s*"Fleet Hunter"/);
+  assert.match(html, /data-op="55"/);
+  assert.match(html, /hunt-radar/);
+  assert.match(html, /parseHuntRow/);
+  // Swarm Topology Graph support
+  assert.match(html, /56:\s*"Topology Map"/);
+  assert.match(html, /data-op="56"/);
+  assert.match(html, /tab-topology/);
+  assert.match(html, /parseTopologyRow/);
+  assert.match(html, /topo-canvas/);
+  // BLE Ecosystem Intel & Continuity Decoder support
+  assert.match(html, /57:\s*"BLE Intel"/);
+  assert.match(html, /data-op="57"/);
+  assert.match(html, /tab-bleintel/);
+  assert.match(html, /parseBleIntelRow/);
+  assert.match(html, /bleintel-list/);
+  // Dual-Band RF Spectrogram & Waterfall Analyzer support
+  assert.match(html, /58:\s*"Spectrogram"/);
+  assert.match(html, /data-op="58"/);
+  assert.match(html, /tab-spectrogram/);
+  assert.match(html, /parseSpectrogramRow/);
+  assert.match(html, /spec-waterfall-canvas/);
+  assert.match(html, /spec-board-subtitle/);
+  assert.match(html, /spec-board-subheader/);
+  assert.match(html, /spec-btn-band/);
+  assert.match(html, /spec-btn-ch-prev/);
+  assert.match(html, /spec-btn-ch-next/);
+  assert.match(html, /specPaletteLut/);
+  // Wi-Fi 6 / 802.11ax OFDMA & BSS Color Intel support
+  assert.match(html, /59:\s*"Wi-Fi 6 Intel"/);
+  assert.match(html, /data-op="59"/);
+  assert.match(html, /tab-wifi6/);
+  assert.match(html, /parseWifi6IntelRow/);
+  assert.match(html, /wifi6-color-matrix/);
+  assert.match(html, /wifi6-list/);
+  // Targeted Deauth & Disassociation Forensic Analyzer support
+  assert.match(html, /63:\s*"Deauth Forensics"/);
+  assert.match(html, /data-op="63"/);
+  assert.match(html, /tab-deauthforensics/);
+  assert.match(html, /parseDeauthForensicRow/);
+  assert.match(html, /deauth-event-tbody/);
+  assert.match(html, /deauth-alert-banner/);
+  // SD Card File Manager & Web Serial support
+  assert.match(html, /64:\s*"File List"/);
+  assert.match(html, /65:\s*"File Download"/);
+  assert.match(html, /66:\s*"File Delete"/);
+  assert.match(html, /tab-files/);
+  assert.match(html, /files-table/);
+  assert.match(html, /file-progress-card/);
+  assert.match(html, /file-preview-card/);
+  assert.match(html, /parseFileMessage/);
+  assert.match(html, /connect-serial/);
+  assert.match(html, /toggleSerial/);
+  assert.match(html, /startFileDownload/);
+  // iPhone / iOS Web Share & Ready Card support
+  assert.match(html, /file-ready-card/);
+  assert.match(html, /ready-share-btn/);
+  assert.match(html, /shareReadyFile/);
+  assert.match(html, /isIosDevice/);
+  assert.match(html, /ready-copy-btn/);
 });
 
 test('Markdown supports tables, safe HTML, stable unique anchors, and document links', () => {

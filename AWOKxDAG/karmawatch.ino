@@ -107,7 +107,7 @@ void mergeKarmaHit(const RogueHit& hit) {
 void drawKarmaWatch() {
   currentView = View::kKarmaWatch;
   display.fillScreen(kBackground);
-  drawHeader("KARMA WATCH", karmaAlertCount
+  drawMonitorHeader("KARMA WATCH", karmaWatchActive, karmaAlertCount
                                 ? "ALERT: multi-SSID AP (Pineapple?)"
                                 : "watching for Karma / fake AP");
   display.setTextSize(2);
@@ -144,7 +144,7 @@ void drawKarmaWatch() {
     display.setCursor(6, 110);
     display.printf("No AP claiming %d+ SSIDs yet.", kKarmaSsidThreshold);
   }
-  drawFooter("Back", "Reset");
+  drawFooter(karmaWatchActive ? "Stop" : "Back", "Reset");
 }
 
 void resetKarmaWatch() {

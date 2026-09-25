@@ -46,6 +46,8 @@
 #include "board_pins.h"
 #include "keyboard_layout.h"
 #include "gps_timezone.h"
+#include "file_crc.h"
+#include "wardrive_stats.h"
 #ifdef AWOK_MINI_DISPLAY
 #include "mini_display.h"
 #include "mini_boot_screen_data.h"
@@ -124,7 +126,7 @@ constexpr uint8_t kDeauthHopChannels[] = {
 constexpr int kDeauthHopChannelCount =
     static_cast<int>(sizeof(kDeauthHopChannels) / sizeof(kDeauthHopChannels[0]));
 constexpr int kMaxDeauthTargets = 8;
-constexpr char kVersion[] = "1.7.2-syz.2";
+constexpr char kVersion[] = "1.7.5-syz.1";
 constexpr char kAuthor[] = "dag nazty";
 constexpr uint32_t kHandshakeRedrawMs = 500;
 constexpr uint32_t kHandshakePulseMs = 2000;
@@ -349,6 +351,7 @@ constexpr uint32_t kAuthFloodRedrawMs = 500;
 constexpr uint32_t kAuthFloodHopIntervalMs = 250;
 constexpr uint32_t kAuthFloodThreshold = 30;  // auth/assoc frames / window
 
+
 // Advanced Watch: shared passive Wi-Fi/BLE anomaly detector.
 constexpr char kAdvancedWatchLogCsvPath[] = "/awokxdag/advanced_watch.csv";
 constexpr int kAdvancedHitQueueSlots = AwokPins::kDualBand ? 64 : 24;
@@ -526,8 +529,10 @@ enum class View {
 // link_protocol.h so the headless bridge chip shares it verbatim.
 #include "link_protocol.h"
 void linkStreamFileReliable(uint8_t index, uint32_t token);
+void linkStreamFileVerified(uint8_t index, uint32_t token, uint32_t startSeq, uint32_t snapshotBytes, uint32_t expectedCrc);
 void linkReceiveFileAck(uint32_t token, uint32_t seq);
 bool linkReliableFileActive();
+bool linkReliableFileTokenMatches(uint32_t token);
 #ifdef AWOK_HEADLESS
 void bridgeQueueFileChunk(const AxdFileChunkMsg& chunk);
 void bridgeServiceFileTransfer();
@@ -943,6 +948,13 @@ void spectrogramLockStep(int dir);
 void spectrogramCycleBand();
 void spectrogramToggleHop();
 void spectrogramLockToChannel(uint8_t ch);
+
+// Result counts for the paged scanner footers in the input tab, which the
+// Arduino build concatenates before these tools' own files.
+extern int wpsCount;
+extern int auditCount;
+extern int trackerCount;
+extern int probeSsidCount;
 
 extern int wifi6Page;
 int wifi6PageCount();

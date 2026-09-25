@@ -6,6 +6,11 @@ TinyGPSPlus gps;
 HardwareSerial gpsSerial(AwokPins::kGpsUart);
 bool gpsStarted = false;
 bool gpsRawEcho = false;
+bool gpsDataSeen = false;
+uint32_t gpsLastDataMs = 0;
+bool gpsDiagnosticsFromSettings = false;
+int gpsMenuPage = 0;  // 0 overview, 1 diagnostics, 2 drive picker
+String gpsMenuNotice;
 
 // Baud options to cycle through on-device; the confirmed default is first.
 const unsigned long kGpsBaudOptions[] = {115200, 9600, 38400, 57600, 4800};
@@ -150,6 +155,8 @@ void applyGpsBaud(unsigned long baud, bool persist) {
                   AwokPins::kGpsTx);
   gpsStarted = true;
   gpsBaudBaselinePassed = gps.passedChecksum();
+  gpsDataSeen = false;
+  gpsLastDataMs = 0;
   Serial.printf("[gps] UART%d rx=%d tx=%d @ %lu baud\n", AwokPins::kGpsUart,
                 AwokPins::kGpsRx, AwokPins::kGpsTx, gpsCurrentBaud);
   if (persist) saveDeviceSettings();
@@ -176,6 +183,8 @@ void updateGps() {
   if (!gpsStarted) return;
   while (gpsSerial.available()) {
     const char c = static_cast<char>(gpsSerial.read());
+    gpsDataSeen = true;
+    gpsLastDataMs = millis();
     gps.encode(c);
     if (gpsRawEcho) Serial.write(c);
     if (c == '\n' || c == '\r') {
@@ -248,6 +257,99 @@ String gpsTimezoneLabel() {
   snprintf(offset, sizeof(offset), "GMT%c%02d:%02d %s", minutes < 0 ? '-' : '+',
            abs(minutes) / 60, abs(minutes) % 60, dst ? "DST" : "standard");
   return String(offset);
+}
+
+WardriveSessionStats wardriveStats;
+
+void resetWardriveSessionStats(bool linked) {
+  wardriveStats = WardriveSessionStats();
+  wardriveStats.mode = fleetActive ? (fleetCoordinator ? 2 : 3) : linked ? 1 : 0;
+  do { wardriveStats.id = esp_random(); } while (!wardriveStats.id);
+}
+
+void updateWardriveSessionStats() {
+  if (!(wardriveActive || linkWardriveActive)) return;
+  const uint32_t elapsed = millis() - wardriveStartMs;
+  wardriveStats.elapsedMs = elapsed;
+  wardriveStats.count(elapsed, wardriveNetworks + wardriveBleCount);
+  const uint32_t dt = elapsed - wardriveStats.sampledMs;
+  if (dt < 1000) return;
+  wardriveStats.sampledMs = elapsed;
+  const bool fix = gpsHasFix();
+  if (fix && dt <= 5000) wardriveStats.fixMs += dt;
+  const bool quality = fix && gps.hdop.isValid() && gps.hdop.age() < 5000 && gps.hdop.hdop() <= 5.0;
+  if (!quality || dt > 5000) { wardriveStats.lastPosition = false; return; }
+  const double lat = gps.location.lat(), lon = gps.location.lng();
+  const bool moving = gps.speed.isValid() && gps.speed.age() < 5000 && gps.speed.kmph() >= 2.0;
+  if (wardriveStats.lastPosition && moving) {
+    const double step = TinyGPSPlus::distanceBetween(wardriveStats.lastLat, wardriveStats.lastLon, lat, lon);
+    const double maxStep = 30.0 + gps.speed.mps() * (dt / 1000.0) * 2.0;
+    if (step >= 1.0 && step <= maxStep) wardriveStats.distanceM += step;
+  }
+  wardriveStats.lastLat = lat; wardriveStats.lastLon = lon;
+  wardriveStats.lastPosition = true;
+}
+
+// 0 unavailable, 1 waiting for rows/flush, 2 flushed, 3 write failure, 4 worker relay.
+int wardriveStorageState() {
+  if (wardriveStats.mode == 3) return 4;
+  if (wardriveStats.writeError) return 3;
+  if (!wardriveCsvReady && (wardriveActive || linkWardriveActive || !wardriveStats.bytes)) return 0;
+  return wardriveStats.didFlush ? 2 : 1;
+}
+
+String wardriveRecordingLabel() {
+  const int state = wardriveStorageState();
+  if (state == 3) return "SD WRITE FAILED";
+  if (state == 0) return "NO SD RECORDING";
+  if (!(wardriveActive || linkWardriveActive)) return "STOPPED";
+  if (state == 4) return gpsHasFix() ? "RELAY TO COORDINATOR" : "WAITING FOR GPS";
+  if (!gpsHasFix()) return wardriveStats.mode == 2 && wardriveStats.rows ? "RECORDING | LOCAL GPS LOST" : "WAITING FOR GPS";
+  return wardriveStats.rows ? "RECORDING" : "WAITING FOR SIGHTINGS";
+}
+
+String wardriveElapsedText() {
+  const uint32_t seconds = wardriveStats.elapsedMs / 1000;
+  char text[20];
+  snprintf(text, sizeof(text), "%02lu:%02lu:%02lu", (unsigned long)(seconds / 3600),
+           (unsigned long)(seconds / 60 % 60), (unsigned long)(seconds % 60));
+  return String(text);
+}
+
+// Called only from existing rendezvous/status opportunities; never retunes a radio.
+void broadcastWardriveDashboard() {
+  if (!wardriveStats.id) return;
+  static uint32_t lastSentMs = 0;
+  if (millis() - lastSentMs < 1000) return;
+  lastSentMs = millis();
+  AxdWardriveStatusMsg msg;
+#ifdef AWOK_HEADLESS
+  constexpr unsigned source = 0;
+#else
+  constexpr unsigned source = 1;
+#endif
+  const unsigned mode = wardriveStats.mode;
+  const uint32_t flushAge = wardriveStats.didFlush ? (millis() - wardriveStats.lastFlushMs) / 1000 : 0xffffffffU;
+  // v1: source,session,active,seconds,metres,fix%,wifi,ble,rate,sats,hdop,
+  // storage,rows,bytes,flushAge,localTime,zone,file,mode,fix,speed,nodes.
+  const int n = snprintf(msg.data, sizeof(msg.data),
+      "$WDSTAT,1,%u,%lu,%u,%lu,%.0f,%u,%lu,%lu,%lu,%d,%.1f,%d,%lu,%lu,%lu,%s,%s,%s,%u,%u,%.1f,%d",
+      source, (unsigned long)wardriveStats.id, unsigned(wardriveActive || linkWardriveActive),
+      (unsigned long)(wardriveStats.elapsedMs / 1000), wardriveStats.distanceM, wardriveStats.fixPercent(),
+      (unsigned long)wardriveNetworks, (unsigned long)wardriveBleCount,
+      (unsigned long)wardriveStats.perMinute(), gpsSats(),
+      gps.hdop.isValid() && gps.hdop.age() < 5000 ? gps.hdop.hdop() : -1.0,
+      wardriveStorageState(), (unsigned long)wardriveStats.rows, (unsigned long)wardriveStats.bytes,
+      (unsigned long)flushAge, gpsTimestamp().c_str(), gpsTimezoneLabel().c_str(), wardriveCsvName().c_str(),
+      mode, unsigned(gpsHasFix()), gps.speed.isValid() && gps.speed.age() < 5000 ? gps.speed.kmph() : 0.0,
+      fleetActive ? fleetMemberCount : linkState == kLinkReady ? 2 : 1);
+  if (n <= 0 || size_t(n) >= sizeof(msg.data)) return;
+  Serial.println(msg.data);
+#ifdef AWOK_HEADLESS
+  bridgeNotifyResult(kSourceWardriveStatus, reinterpret_cast<const uint8_t*>(msg.data), n);
+#else
+  if (linkEspNowReady) esp_now_send(kLinkBroadcastAddr, reinterpret_cast<uint8_t*>(&msg), sizeof(msg));
+#endif
 }
 
 // ---- GPS status + wardriving --------------------------------------------
@@ -374,13 +476,14 @@ bool openWardriveCsv() {
     return false;
   }
   wardriveCsvReady = true;
+  wardriveStats.bytes = g_wardriveFile.size();
   Serial.printf("[wardrive] logging to %s\n", g_wardriveCsvPath.c_str());
   return true;
 }
 
 void closeWardriveCsv() {
   if (g_wardriveFile) {
-    g_wardriveFile.flush();
+    flushWardriveCsv();
     g_wardriveFile.close();
   }
   wardriveCsvReady = false;
@@ -389,6 +492,12 @@ void closeWardriveCsv() {
 void flushWardriveCsv() {
   if (wardriveCsvReady && g_wardriveFile) {
     g_wardriveFile.flush();
+    if (g_wardriveFile.getWriteError()) { wardriveStats.writeError = true; wardriveCsvReady = false; }
+    else {
+      wardriveStats.flushedRows = wardriveStats.rows;
+      wardriveStats.lastFlushMs = millis();
+      wardriveStats.didFlush = true;
+    }
   }
 }
 
@@ -448,7 +557,15 @@ static void wardriveEmitRow(const char* line, size_t len) {
                        len);
 #endif
   if (!wardriveCsvReady || !g_wardriveFile) return;
-  g_wardriveFile.println(line);
+  const size_t written = g_wardriveFile.println(line);
+  if (written != len + 2 || g_wardriveFile.getWriteError()) {
+    wardriveStats.writeError = true;
+    Serial.println("[wardrive] SD row write failed; recording stopped");
+    closeWardriveCsv();
+    return;
+  }
+  ++wardriveStats.rows;
+  wardriveStats.bytes += written;
 }
 
 static void wardriveEmitRow(const String& line) {
@@ -518,129 +635,250 @@ WardriveBleCallbacks wardriveBleCallbacks;
 // Time-multiplex scheduler for wardrive; drawWardrive reads its phase.
 RadioScheduler wardriveSched;
 
+bool gpsMenuHit(int x, int y, int left, int top, int width, int height) {
+  return x >= left && x < left + width && y >= top && y < top + height;
+}
+
+const char* gpsReceptionLabel() {
+  if (!gpsStarted || !gpsDataSeen) return "NO GPS DATA";
+  if (millis() - gpsLastDataMs >= 5000) return "DATA STALE";
+  return gpsHasFix() ? "FIX ACQUIRED" : "SEARCHING";
+}
+
 void drawGps() {
+  gpsDiagnosticsFromSettings = false;
+  gpsMenuPage = 0;
   currentView = View::kGps;
   display.fillScreen(kBackground);
-  drawHeader("GPS", gpsHasFix() ? "fix acquired" : "searching for satellites");
-  display.setTextSize(2);
-  display.setTextColor(gpsHasFix() ? kGood : kWarn, kBackground);
-  display.setCursor(6, 54);
-  display.print(gpsHasFix() ? "FIX" : "NO FIX");
-
-  display.setTextSize(1);
-  display.setTextColor(ILI9341_WHITE, kBackground);
-  display.setCursor(6, 90);
-  display.printf("Satellites: %d", gpsSats());
-  if (gpsHasFix()) {
-    display.setCursor(6, 104);
-    display.printf("Lat: %.6f", gps.location.lat());
-    display.setCursor(6, 116);
-    display.printf("Lon: %.6f", gps.location.lng());
-    display.setCursor(6, 128);
-    display.printf("Alt: %.1f m  Spd: %.1f km/h", gps.altitude.meters(),
-                   gps.speed.kmph());
-  }
-  display.setCursor(6, 140);
-  display.print("Local: " + gpsTimestamp());
-  display.setCursor(6, 152);
-  display.print(gpsTimezoneLabel());
-  display.setCursor(6, 164);
-  if (gpsLocalZone >= 0) display.print(clipped(String(AwokTime::kZones[gpsLocalZone].name), 37));
-
-  // Link diagnostics: distinguish "wrong baud/wiring" from "no fix yet".
-  const uint32_t passed = gps.passedChecksum();
-  const uint32_t failed = gps.failedChecksum();
-  const uint32_t passedHere =
-      passed >= gpsBaudBaselinePassed ? passed - gpsBaudBaselinePassed : passed;
-  display.drawFastHLine(6, 180, 228, kPanel);
+  drawHeader("GPS", "location and local time");
+  const bool fix = gpsHasFix();
+  const String sats = gps.satellites.isValid() && gps.satellites.age() < 5000 ? String(gpsSats()) : "--";
+  const String hdop = gps.hdop.isValid() && gps.hdop.age() < 5000 ? String(gps.hdop.hdop(), 1) : "--";
+  const String speed = fix && gps.speed.isValid() && gps.speed.age() < 5000 ? String(gps.speed.kmph(), 1) + " km/h" : "--";
+  const String altitude = fix && gps.altitude.isValid() && gps.altitude.age() < 5000 ? String(gps.altitude.meters(), 1) + " m" : "--";
+  const String local = gpsTimestamp();
+#ifdef AWOK_MINI_DISPLAY
+  display.dashboardLine(0, gpsReceptionLabel(), fix ? kGood : kWarn);
+  display.dashboardLine(1, (local.length() == 19 ? local.substring(11) + " local" : "Time: waiting GPS").c_str(), kAccent);
+  display.dashboardLine(2, gpsTimezoneLabel().c_str(), kMuted);
+  display.dashboardLine(3, (fix ? "Lat " + String(gps.location.lat(), 6) : "Lat --").c_str(), ILI9341_WHITE);
+  display.dashboardLine(4, (fix ? "Lon " + String(gps.location.lng(), 6) : "Lon --").c_str(), ILI9341_WHITE);
+  display.dashboardLine(5, ("Speed " + speed).c_str(), ILI9341_WHITE);
+  display.dashboardLine(6, ("Alt " + altitude).c_str(), kMuted);
+  display.dashboardLine(7, ("Satellites " + sats).c_str(), kMuted);
+  display.dashboardLine(8, ("HDOP " + hdop).c_str(), kMuted);
+  drawSmallButton(4, 280, 72, 36, "Home", kMuted);
+  drawSmallButton(84, 280, 72, 36, "Drive", kAccent);
+  drawSmallButton(164, 280, 72, 36, "Diag", kAccent);
+#else
+  display.setTextSize(2); display.setTextColor(fix ? kGood : kWarn, kBackground);
+  display.setCursor(8, 52); display.print(gpsReceptionLabel());
+  display.setTextSize(1); display.setTextColor(ILI9341_WHITE, kBackground);
+  display.setCursor(8, 88); display.print("Satellites: " + sats + "   HDOP: " + hdop);
+  display.setCursor(8, 106); display.print("Speed: " + speed + "   Alt: " + altitude);
   display.setTextColor(kAccent, kBackground);
-  display.setCursor(6, 186);
-  display.print("LINK DIAGNOSTICS");
+  display.setCursor(8, 134); display.print("LOCAL TIME");
   display.setTextColor(ILI9341_WHITE, kBackground);
-  display.setCursor(6, 200);
-  display.printf("Baud %lu  chars %lu", gpsCurrentBaud,
-                 static_cast<unsigned long>(gps.charsProcessed()));
-  display.setCursor(6, 212);
-  display.setTextColor(passedHere > 0 ? kGood : kBad, kBackground);
-  display.printf("NMEA ok %lu (this baud %lu)  bad %lu",
-                 static_cast<unsigned long>(passed),
-                 static_cast<unsigned long>(passedHere),
-                 static_cast<unsigned long>(failed));
+  display.setCursor(8, 148); display.print(local);
   display.setTextColor(kMuted, kBackground);
-  display.setCursor(6, 226);
-  display.print("Last: ");
-  display.print(clipped(String(gpsLastSentence), 32));
-  display.setTextColor(passedHere > 0 ? kMuted : kWarn, kBackground);
-  display.setCursor(6, 240);
-  if (passedHere == 0) {
-    display.print("No valid NMEA: tap Baud to retry.");
-  } else if (!gpsHasFix()) {
-    display.print("Good data; need open-sky fix.");
-  } else {
-    display.print("Fix locked.");
+  display.setCursor(8, 162); display.print(gpsTimezoneLabel());
+  display.setTextColor(ILI9341_WHITE, kBackground);
+  display.setCursor(8, 190); display.print(fix ? "Lat: " + String(gps.location.lat(), 6) : "Lat: -- (waiting for fix)");
+  display.setCursor(8, 204); display.print(fix ? "Lon: " + String(gps.location.lng(), 6) : "Lon: -- (waiting for fix)");
+  drawSmallButton(8, 228, 224, 42, "Diagnostics", kAccent);
+  drawSmallButton(4, 280, 112, 36, "Home", kMuted);
+  drawSmallButton(124, 280, 112, 36, "Drive modes", kAccent);
+#endif
+}
+
+void drawGpsDiagnostics() {
+  gpsMenuPage = 1;
+  currentView = View::kGps;
+  display.fillScreen(kBackground);
+  drawHeader("GPS DIAG", "receiver / wiring / raw data");
+  const uint32_t passed = gps.passedChecksum();
+  const uint32_t passedHere = passed >= gpsBaudBaselinePassed ? passed - gpsBaudBaselinePassed : passed;
+  display.setTextSize(1); display.setTextColor(kAccent, kBackground);
+  display.setCursor(8, 50); display.print(gpsReceptionLabel());
+  display.setTextColor(ILI9341_WHITE, kBackground);
+  display.setCursor(8, 68); display.printf("UART%d  RX %d  TX %d", AwokPins::kGpsUart, AwokPins::kGpsRx, AwokPins::kGpsTx);
+  display.setCursor(8, 84); display.printf("Chars %lu | valid %lu", (unsigned long)gps.charsProcessed(), (unsigned long)passed);
+  display.setCursor(8, 100); display.printf("This baud %lu | bad %lu", (unsigned long)passedHere, (unsigned long)gps.failedChecksum());
+  display.setCursor(8, 116); display.print("Last: " + clipped(String(gpsLastSentence), 30));
+  display.setTextColor(kMuted, kBackground);
+  display.setCursor(8, 140);
+  if (!gpsDataSeen || millis() - gpsLastDataMs >= 5000) display.print("Check power, wiring, and baud rate.");
+  else if (!passedHere) display.print("Data received; try another baud.");
+  else if (!gpsHasFix()) display.print("Valid data; move to open sky.");
+  else display.print("Receiver has a valid position fix.");
+  display.setCursor(8, 156); display.print("Raw NMEA is sent to USB Serial.");
+  drawSmallButton(8, 180, 224, 40, "Baud: " + String(gpsCurrentBaud) + " / change", kAccent);
+  drawSmallButton(8, 228, 224, 40, String("Raw NMEA: ") + (gpsRawEcho ? "On" : "Off"), kAccent);
+  drawSmallButton(4, 280, 112, 36, "Back", kMuted);
+  drawSmallButton(124, 280, 112, 36, "Home", kAccent);
+}
+
+const char* driveModeState() {
+  if (fleetListening && !fleetActive) return "Fleet: waiting to join";
+  if (fleetActive) return fleetWardriveOn ? "Fleet: running" : "Fleet: stopped / still joined";
+  if (wardriveActive) return "Solo: running";
+  if (linkWardriveActive) return linkState == kLinkReady && millis() - linkPartnerLastSeenMs > kLinkPeerTimeoutMs ? "Split: partner lost" : "Split: running";
+  if (linkState == kLinkDiscovering || linkState == kLinkAwaitConfirm) return "Split: pairing in progress";
+  if (linkState == kLinkReady) return "Split: paired / stopped";
+  return "No drive running";
+}
+
+void drawDriveMenu() {
+  gpsMenuPage = 2;
+  currentView = View::kGps;
+  display.fillScreen(kBackground);
+  drawHeader("DRIVE MODES", driveModeState());
+  drawSmallButton(8, 48, 224, 44, wardriveActive ? "Solo / resume screen" : "Solo wardrive", kAccent);
+  drawSmallButton(8, 116, 224, 44, "Split / two boards", kAccent);
+  drawSmallButton(8, 184, 224, 44, "Fleet / multiple boards", kAccent);
+  display.setTextSize(1); display.setTextColor(kMuted, kBackground);
+  display.setCursor(8, 98); display.print("One board | Wi-Fi + BLE");
+  display.setCursor(8, 166); display.print("Pair boards | Wi-Fi | separate CSVs");
+  display.setCursor(8, 234); display.print("Coordinator + workers | merged CSV");
+  display.setTextColor(kWarn, kBackground);
+  display.setCursor(8, 256); display.print(clipped(gpsMenuNotice, 37));
+  drawSmallButton(4, 280, 112, 36, "Back", kMuted);
+  drawSmallButton(124, 280, 112, 36, "Home", kAccent);
+}
+
+void openDriveMenu() { gpsMenuNotice = ""; drawDriveMenu(); }
+
+void selectDriveMode(int mode) {
+  gpsMenuNotice = "";
+  if ((fleetActive || fleetListening) && mode != 2) gpsMenuNotice = "Leave Fleet before changing mode.";
+  else if (wardriveActive && mode != 0) gpsMenuNotice = "Stop Solo before changing mode.";
+  else if (linkWardriveActive && !fleetActive && mode != 1) gpsMenuNotice = "Stop Split before changing mode.";
+  else if ((linkState == kLinkDiscovering || linkState == kLinkAwaitConfirm) && mode != 1) gpsMenuNotice = "Cancel Split pairing first.";
+  else if (linkState == kLinkReady && mode == 2 && !fleetActive) gpsMenuNotice = "Unpair Split before joining Fleet.";
+  if (gpsMenuNotice.length()) { drawDriveMenu(); return; }
+  if (mode == 0) {
+    if (wardriveActive) drawWardrive(); else startWardrive();
+  } else if (mode == 1) openLinkWardrive();
+  else if (mode == 2) {
+    if (!fleetActive && !fleetListening) {
+      linkEnsureEspNow();
+      fleetMenuOpen = true;
+    }
+    drawLinkWardrive();
   }
-  drawFourButtonFooter("Home", "Baud", "Drive", "Link");
+}
+
+void redrawGpsPage() {
+  if (gpsMenuPage == 1) drawGpsDiagnostics();
+  else if (gpsMenuPage == 2) drawDriveMenu();
+  else drawGps();
+}
+
+void handleGpsTouch(int x, int y) {
+  if (gpsMenuPage == 0) {
+#ifdef AWOK_MINI_DISPLAY
+    if (gpsMenuHit(x, y, 4, 280, 72, 36)) drawHome();
+    else if (gpsMenuHit(x, y, 84, 280, 72, 36)) openDriveMenu();
+    else if (gpsMenuHit(x, y, 164, 280, 72, 36)) drawGpsDiagnostics();
+#else
+    if (gpsMenuHit(x, y, 8, 228, 224, 42)) drawGpsDiagnostics();
+    else if (gpsMenuHit(x, y, 4, 280, 112, 36)) drawHome();
+    else if (gpsMenuHit(x, y, 124, 280, 112, 36)) openDriveMenu();
+#endif
+  } else if (gpsMenuPage == 1) {
+    if (gpsMenuHit(x, y, 8, 180, 224, 40)) { cycleGpsBaud(); drawGpsDiagnostics(); }
+    else if (gpsMenuHit(x, y, 8, 228, 224, 40)) { toggleSettingFlag(kSettingNmeaEcho); drawGpsDiagnostics(); }
+    else if (gpsMenuHit(x, y, 4, 280, 112, 36)) {
+      if (gpsDiagnosticsFromSettings) { gpsDiagnosticsFromSettings = false; drawSettings(); }
+      else drawGps();
+    }
+    else if (gpsMenuHit(x, y, 124, 280, 112, 36)) drawHome();
+  } else {
+    if (gpsMenuHit(x, y, 8, 48, 224, 44)) selectDriveMode(0);
+    else if (gpsMenuHit(x, y, 8, 116, 224, 44)) selectDriveMode(1);
+    else if (gpsMenuHit(x, y, 8, 184, 224, 44)) selectDriveMode(2);
+    else if (gpsMenuHit(x, y, 4, 280, 112, 36)) drawGps();
+    else if (gpsMenuHit(x, y, 124, 280, 112, 36)) drawHome();
+  }
+}
+
+void drawWardriveTile(int x, int y, const char* label, uint32_t value) {
+  display.fillRoundRect(x, y, 111, 52, 5, kPanel);
+  display.setTextSize(1); display.setTextColor(kMuted, kPanel);
+  display.setCursor(x + 7, y + 6); display.print(label);
+  display.setTextSize(value > 999999 ? 1 : 2); display.setTextColor(ILI9341_WHITE, kPanel);
+  display.setCursor(x + 7, y + 24); display.print(value);
+}
+
+// The same session information is used by solo, Split, and Fleet dashboards.
+void drawWardriveDashboardBody(const String& context) {
+  const int storage = wardriveStorageState();
+  const uint16_t statusColor = storage == 0 || storage == 3 ? kBad : gpsHasFix() ? kGood : kWarn;
+  const uint32_t flushAge = wardriveStats.didFlush ? (millis() - wardriveStats.lastFlushMs) / 1000 : 0;
+  String local = gpsTimestamp();
+#ifdef AWOK_MINI_DISPLAY
+  // Native 128px summary: critical information stays visible above real footer
+  // actions instead of becoming a long, scrolling portrait document.
+  display.dashboardLine(0, wardriveRecordingLabel().c_str(), statusColor);
+  display.dashboardLine(1, (local.length() == 19 ? local.substring(11) + " local" : "Time: waiting GPS").c_str(), kAccent);
+  char line[48];
+  snprintf(line, sizeof(line), "WiFi %lu BLE %lu", (unsigned long)wardriveNetworks, (unsigned long)wardriveBleCount);
+  display.dashboardLine(2, line, ILI9341_WHITE);
+  snprintf(line, sizeof(line), "%s %.2fkm", wardriveElapsedText().c_str(), wardriveStats.distanceM / 1000.0);
+  display.dashboardLine(3, line, ILI9341_WHITE);
+  snprintf(line, sizeof(line), "GPS %d sat fix %u%%", gpsSats(), wardriveStats.fixPercent());
+  display.dashboardLine(4, line, gpsHasFix() ? kGood : kWarn);
+  snprintf(line, sizeof(line), "%lu/min recent", (unsigned long)wardriveStats.perMinute());
+  display.dashboardLine(5, line, kAccent);
+  snprintf(line, sizeof(line), storage == 4 ? "Relay to coordinator" : "SD %lu rows %luKB",
+           (unsigned long)wardriveStats.rows, (unsigned long)(wardriveStats.bytes / 1024));
+  display.dashboardLine(6, line, statusColor);
+  snprintf(line, sizeof(line), wardriveStats.didFlush ? "Flushed %lus ago" : "No flush yet", (unsigned long)flushAge);
+  display.dashboardLine(7, storage == 4 || wardriveStats.mode == 1 ? context.c_str() : line, kMuted);
+  display.dashboardLine(8, storage == 4 ? "Worker: no local CSV" : wardriveCsvName().c_str(), kMuted);
+#else
+  display.setTextSize(1); display.setTextColor(statusColor, kBackground);
+  display.setCursor(6, 49); display.print(wardriveRecordingLabel());
+  display.setTextColor(ILI9341_WHITE, kBackground);
+  display.setCursor(6, 65); display.print(local);
+  display.setTextColor(kMuted, kBackground);
+  display.setCursor(6, 79); display.print(gpsTimezoneLabel());
+  drawWardriveTile(6, 94, "WI-FI", wardriveNetworks);
+  drawWardriveTile(123, 94, "BLE", wardriveBleCount);
+  display.setTextSize(1); display.setTextColor(ILI9341_WHITE, kBackground);
+  display.setCursor(6, 156);
+  display.printf("%s  %.2f km  %lu/min", wardriveElapsedText().c_str(), wardriveStats.distanceM / 1000.0,
+                 (unsigned long)wardriveStats.perMinute());
+  display.setTextColor(gpsHasFix() ? kGood : kWarn, kBackground);
+  display.setCursor(6, 176);
+  display.printf("GPS %s | %d satellites", gpsHasFix() ? "FIX" : "NO FIX", gpsSats());
+  display.setCursor(6, 190);
+  const double hdop = gps.hdop.isValid() && gps.hdop.age() < 5000 ? gps.hdop.hdop() : -1;
+  if (hdop >= 0) display.printf("HDOP %.1f | fix coverage %u%%", hdop, wardriveStats.fixPercent());
+  else display.printf("HDOP -- | fix coverage %u%%", wardriveStats.fixPercent());
+  display.fillRoundRect(6, 207, 228, 52, 4, kPanel);
+  display.setTextColor(statusColor, kPanel); display.setCursor(12, 213);
+  if (storage == 4) display.print("Relay to coordinator");
+  else display.printf("SD %lu rows | %lu KB", (unsigned long)wardriveStats.rows, (unsigned long)(wardriveStats.bytes / 1024));
+  display.setTextColor(kMuted, kPanel); display.setCursor(12, 228);
+  if (storage == 3) display.print("Write failed - check SD card");
+  else if (storage == 0) display.print("No file recording available");
+  else if (storage == 4) display.print("Coordinator owns the merged CSV");
+  else if (wardriveStats.didFlush) display.printf("Flushed %lu rows | %lus ago", (unsigned long)wardriveStats.flushedRows, (unsigned long)flushAge);
+  else display.print("Waiting for first flush");
+  display.setCursor(12, 243);
+  display.print(storage == 4 ? "Worker: no local CSV" : clipped(wardriveCsvName(), 35));
+  display.setTextColor(kMuted, kBackground); display.setCursor(6, 266); display.print(clipped(context, 37));
+#endif
 }
 
 void drawWardrive() {
   currentView = View::kWardrive;
   display.fillScreen(kBackground);
-  drawHeader("WARDRIVE",
-             gpsHasFix() ? "logging to WiGLE CSV" : "waiting for GPS fix");
-  display.setTextSize(2);
-  display.setTextColor(gpsHasFix() ? kGood : kWarn, kBackground);
-  display.setCursor(6, 54);
-  display.print(gpsHasFix() ? "LOGGING" : "NO FIX");
-
-  display.setTextSize(1);
-  display.setTextColor(ILI9341_WHITE, kBackground);
-  display.setCursor(6, 92);
-  if (radiosCoexist) {
-    const bool bleNow = wardriveSched.phase == RadioPhase::kBle;
-    display.printf("Wi-Fi: %lu   BLE: %lu   [%s]",
-                   static_cast<unsigned long>(wardriveNetworks),
-                   static_cast<unsigned long>(wardriveBleCount),
-                   bleNow ? "BLE" : "WiFi");
-  } else {
-    display.printf("Wi-Fi: %lu   BLE: off",
-                   static_cast<unsigned long>(wardriveNetworks));
-  }
-  display.setCursor(6, 106);
-  display.printf("Scans: %lu   Sats: %d",
-                 static_cast<unsigned long>(wardriveScans), gpsSats());
-  const uint32_t elapsed = (millis() - wardriveStartMs) / 1000;
-  display.setCursor(6, 120);
-  display.printf("Elapsed: %lus", static_cast<unsigned long>(elapsed));
-  display.setTextColor(kMuted, kBackground);
-  display.setCursor(6, 140);
-  if (gpsHasFix()) {
-    display.printf("At: %.5f, %.5f", gps.location.lat(), gps.location.lng());
-  } else {
-    display.print("Networks are only logged with a");
-    display.setCursor(6, 152);
-    display.print("valid fix; keep moving.");
-  }
-  display.setTextColor(wardriveCsvReady ? kAccent : kWarn, kBackground);
-  display.setCursor(6, 176);
-  if (wardriveCsvReady) display.print("SD: " + wardriveCsvName());
-  else display.print("SD unavailable; not logging");
-  display.setTextColor(kMuted, kBackground);
-  if (radiosCoexist) {
-    display.setCursor(6, 196);
-    display.print("Wi-Fi and BLE alternate windows");
-    display.setCursor(6, 208);
-    display.print("(one radio at a time on C5).");
-  } else {
-    display.setCursor(6, 196);
-    display.print("BLE unavailable on this board;");
-    display.setCursor(6, 208);
-    display.print("logging Wi-Fi APs only.");
-  }
-  display.setCursor(6, 228);
-  display.print("Local: " + gpsTimestamp());
-  display.setCursor(6, 240);
-  display.print(gpsTimezoneLabel());
-  drawFooter("Back", "Home");
+  drawHeader("WARDRIVE", radiosCoexist ? "Wi-Fi + BLE session" : "Wi-Fi session");
+  const String phase = radiosCoexist ? (wardriveSched.phase == RadioPhase::kBle ? "BLE window" : "Wi-Fi window") : "Wi-Fi only";
+  drawWardriveDashboardBody(phase + " | scans " + String(wardriveScans));
+  drawFooter("Stop", "Home");
 }
 
 // Wi-Fi window hooks for the dual-radio scheduler: kick an async passive AP
@@ -662,6 +900,7 @@ void startWardrive() {
   bleHitHead = 0;
   bleHitTail = 0;
   wardriveStartMs = millis();
+  resetWardriveSessionStats(false);
   lastWardriveDrawMs = 0;
   signalMonitorActive = false;
 

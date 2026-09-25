@@ -77,9 +77,14 @@ int blePage = 0;
 View currentView = View::kHome;
 View auditReturnView = View::kWifi;
 int reconPage = 0;
+int reconResultPage = 0;  // shared page index for the live scanner result screens
 int reconCategory = -1;  // -1 = category picker; tools return to their category
 int monitorPage = 0;
+int monitorCategory = -1;  // -1 group picker; preserve tool origin on return
 int homePage = 0;
+// Home overlay: the About page and the memory/radio error screens all want a
+// single "any tap returns to the tiles" gesture. homePage stays the tile page.
+bool homeOverlay = false;
 int wifi6Page = 0;
 int deauthForensicsPage = 0;
 DeviceSettingsRecord deviceSettings = {};
@@ -802,6 +807,81 @@ void drawFiveButtonFooter(const String& a, const String& b, const String& c,
   drawSmallButton(194, 284, 44, 30, e, kBad);
 }
 
+// Shared card-menu metrics (Network Tools look: 224x44 rounded card + pager),
+// used by Home, Recon, Monitor, Attacks, and the Wi-Fi results screen so they
+// read as one system.
+constexpr int kMenuPerPage = 4;
+constexpr int kMenuFirstY = 58;
+constexpr int kMenuRowPitch = 50;
+constexpr int kMenuRowHeight = 44;
+constexpr int kMenuCardHeight = 44;
+
+// Shared menu card: a bold title over a muted one-line description. `y` is the
+// card's top; `outline` colors the border (kAccent normally, kGood when active,
+// kBad for destructive entries).
+void drawMenuCard(int y, const String& title, const String& detail, uint16_t outline) {
+#ifdef AWOK_MINI_DISPLAY
+  display.button(8, y, 224, kMenuCardHeight, (title + " | " + detail).c_str(),
+                 outline);
+#else
+  display.drawRoundRect(8, y, 224, kMenuCardHeight, 5, outline);
+  display.setTextSize(title.length() <= 17 ? 2 : 1);
+  display.setTextColor(ILI9341_WHITE, kBackground);
+  display.setCursor(16, y + 5);
+  display.print(clipped(title, 34));
+  display.setTextSize(1);
+  display.setTextColor(kMuted, kBackground);
+  display.setCursor(16, y + 29);
+  display.print(clipped(detail, 34));
+#endif
+}
+
+// ---- Shared paging for the live scanner result screens ---------------------
+// One card page holds kMenuPerPage entries; reconResultPage is the shared index
+// (only one scanner runs at a time, and each start() resets it).
+int reconResultPages(int count) {
+  return max(1, (count + kMenuPerPage - 1) / kMenuPerPage);
+}
+
+// Header suffix like "  2/5" while there is more than one page (else empty).
+String reconResultPageLabel(int count) {
+  const int pages = reconResultPages(count);
+  if (reconResultPage >= pages) reconResultPage = pages - 1;
+  if (reconResultPage < 0) reconResultPage = 0;
+  return pages > 1 ? "  " + String(reconResultPage + 1) + "/" + String(pages) : "";
+}
+
+// Footer: Back + Prev/Next (and an optional action button) when paged; the plain
+// two-button footer otherwise. `action` is nullptr for Back-only screens.
+void drawReconResultFooter(const char* back, const char* action, int count) {
+  const int pages = reconResultPages(count);
+  if (pages > 1) {
+    if (action) drawFourButtonFooter(back, "Prev", "Next", action);
+    else drawThreeButtonFooter(back, "Prev", "Next");
+  } else {
+    drawFooter(back, action ? action : back);
+  }
+}
+
+// Footer hit-test mirroring drawReconResultFooter. Returns 0=Back, 1=Prev,
+// 2=Next, 3=Action, and advances reconResultPage for Prev/Next.
+int reconResultFooterHit(int x, int count, bool hasAction) {
+  const int pages = reconResultPages(count);
+  if (pages > 1) {
+    if (hasAction) {
+      if (x < 60) return 0;
+      if (x < 120) { reconResultPage = (reconResultPage - 1 + pages) % pages; return 1; }
+      if (x < 180) { reconResultPage = (reconResultPage + 1) % pages; return 2; }
+      return 3;
+    }
+    if (x < 80) return 0;
+    if (x < 160) { reconResultPage = (reconResultPage - 1 + pages) % pages; return 1; }
+    reconResultPage = (reconResultPage + 1) % pages;
+    return 2;
+  }
+  return (hasAction && x >= kScreenWidth / 2) ? 3 : 0;
+}
+
 void drawAboutPage() {
   display.fillScreen(kBackground);
   drawHeader("ABOUT", "AxD");
@@ -842,7 +922,59 @@ void drawAboutPage() {
   display.setTextColor(kMuted, kBackground);
   display.setCursor(6, 218);
   display.print("Tap anywhere to go back.");
-  drawFooter("< Back", "< Back");
+  drawFooter("Back", "Back");
+}
+
+// Home destinations. Files and Settings are first-class entries here so neither
+// is reachable only through the device-health Status screen.
+enum HomeAction {
+  kHomeRecon, kHomeAttacks, kHomeMonitor, kHomeGps,
+  kHomeFiles, kHomeSettings, kHomeStatus, kHomeAbout
+};
+struct HomeTile {
+  const char* label;
+  const char* detail;
+  uint16_t color;
+  HomeAction action;
+};
+const HomeTile kHomeTiles[] = {
+    {"Recon", "Scan Wi-Fi, BLE, RF, LAN", kAccent, kHomeRecon},
+    {"Attacks", "Active RF - authorized use", kBad, kHomeAttacks},
+    {"Monitor", "Detectors & forensics", kAccent, kHomeMonitor},
+    {"GPS", "Fix, wardrive, link modes", kAccent, kHomeGps},
+    {"Files", "Browse & send SD captures", kAccent, kHomeFiles},
+    {"Settings", "Display, GPS, behavior", kAccent, kHomeSettings},
+    {"Status", "Device health & radios", kAccent, kHomeStatus},
+    {"About", "Version & authorized use", kAccent, kHomeAbout},
+};
+const int kHomeTileCount = sizeof(kHomeTiles) / sizeof(kHomeTiles[0]);
+// Card metrics shared with the other menus (see drawMenuCard).
+const int kHomeTilesPerPage = 4;
+const int kHomeFirstY = 58;
+const int kHomeRowPitch = 50;
+const int kHomeTileHeight = kMenuCardHeight;
+
+int homePageCount() {
+  return max(1, (kHomeTileCount + kHomeTilesPerPage - 1) / kHomeTilesPerPage);
+}
+
+void launchHomeTile(int index) {
+  if (index < 0 || index >= kHomeTileCount) return;
+  switch (kHomeTiles[index].action) {
+    case kHomeRecon: reconCategory = -1; reconPage = 0; drawReconMenu(); break;
+    case kHomeAttacks: drawAttacksMenu(); break;
+    case kHomeMonitor: openMonitorMenu(); break;
+    case kHomeGps: drawGps(); break;
+    case kHomeFiles: openFilesManager(); break;
+    case kHomeSettings: openSettings(); break;
+    case kHomeStatus: drawStatus(); break;
+    case kHomeAbout: openAbout(); break;
+  }
+}
+
+void openAbout() {
+  homeOverlay = true;
+  drawHome();
 }
 
 void drawHome() {
@@ -850,33 +982,31 @@ void drawHome() {
   if (networkToolsOpen()) closeNetworkTools();
   signalMonitorActive = false;
   currentView = View::kHome;
-  if (homePage == 1) {
+  if (homeOverlay) {
     drawAboutPage();
     return;
   }
+  const int pages = homePageCount();
+  if (homePage < 0 || homePage >= pages) homePage = 0;
   display.fillScreen(kBackground);
-  drawHeader("AxD", sdReady ? "SD ready | pentest toolkit"
-                            : "SD missing | pentest toolkit");
-  drawButton(12, 44, 216, 40, "Recon");
-  drawButton(12, 88, 216, 40, "Attacks", kBad);
-  drawButton(12, 132, 216, 40, "Monitor");
-  drawButton(12, 176, 216, 40, "GPS");
-  drawButton(12, 220, 216, 40, "Status");
+  String detail = sdReady ? "SD ready" : "SD missing";
+  detail += " | " + String(homePage + 1) + "/" + String(pages);
+  drawHeader("AxD", detail);
+  const int start = homePage * kHomeTilesPerPage;
+  const int rows = min(kHomeTilesPerPage, kHomeTileCount - start);
+  for (int row = 0; row < rows; ++row) {
+    const HomeTile& tile = kHomeTiles[start + row];
+    drawMenuCard(kHomeFirstY + row * kHomeRowPitch, tile.label, tile.detail,
+                 tile.color);
+  }
+  // Standard paging: Prev on earlier pages, Next while more pages remain. The
+  // firmware version fills the slot that has no page to move toward.
 #ifdef AWOK_MINI_DISPLAY
-  display.button(128, 284, 106, 30, "About", kAccent);
+  if (homePage > 0) display.button(4, 284, 106, 30, "Prev", kMuted);
+  if (homePage + 1 < pages) display.button(128, 284, 106, 30, "Next", kAccent);
 #else
-  display.fillRect(0, kFooterTop, kScreenWidth, kScreenHeight - kFooterTop,
-                   kBackground);
-  display.drawRoundRect(6, 284, 106, 30, 6, kMuted);
-  display.setTextSize(1);
-  display.setTextColor(ILI9341_WHITE, kBackground);
-  int16_t vbx, vby;
-  uint16_t vbw, vbh;
-  display.getTextBounds(kVersion, 0, 0, &vbx, &vby, &vbw, &vbh);
-  display.setCursor(6 + (106 - static_cast<int>(vbw)) / 2,
-                    284 + (30 - static_cast<int>(vbh)) / 2);
-  display.print(kVersion);
-  drawButton(128, 284, 106, 30, "About >", kAccent);
+  drawFooter(homePage > 0 ? "Prev" : kVersion,
+             homePage + 1 < pages ? "Next" : kVersion);
 #endif
 }
 
@@ -912,7 +1042,7 @@ void drawScanning(const String& kind) {
 
 void drawWifiResults() {
   currentView = View::kWifi;
-  const int pages = max(1, (wifiCount + kVisibleRows - 1) / kVisibleRows);
+  const int pages = max(1, (wifiCount + kMenuPerPage - 1) / kMenuPerPage);
   if (wifiPage >= pages) wifiPage = pages - 1;
   if (wifiPage < 0) wifiPage = 0;
   display.fillScreen(kBackground);
@@ -920,31 +1050,23 @@ void drawWifiResults() {
                   String(pages) + " | SD ";
   detail += lastScanSdWriteOk ? "saved" : (sdReady ? "write error" : "missing");
   drawHeader("WI-FI RESULTS", detail);
-  display.setTextSize(1);
-  const int start = wifiPage * kVisibleRows;
-  const int rows = min(kVisibleRows, wifiCount - start);
-#ifdef AWOK_MINI_DISPLAY
-  display.selectableRows(rows);
-#endif
+  const int start = wifiPage * kMenuPerPage;
+  const int rows = min(kMenuPerPage, wifiCount - start);
   for (int row = 0; row < rows; ++row) {
     const int index = start + row;
-    const int y = 48 + row * 22;
-    display.setTextColor(isSaved(wifiEntries[index]) ? kAccent
-                                                     : ILI9341_WHITE,
-                         kBackground);
-    display.setCursor(5, y);
-    display.print(clipped(wifiEntries[index].ssid.length()
-                              ? wifiEntries[index].ssid
-                              : "<hidden>",
-                          20));
-    if (isSaved(wifiEntries[index])) display.print(" *");
-    display.setTextColor(kMuted, kBackground);
-    display.setCursor(5, y + 11);
-    display.printf("%4ld dBm  ch%-3ld %sG  %s",
-                   static_cast<long>(wifiEntries[index].rssi),
-                   static_cast<long>(wifiEntries[index].channel),
-                   bandLabel(wifiEntries[index].channel),
-                   authShortLabel(wifiEntries[index].auth));
+    const bool saved = isSaved(wifiEntries[index]);
+    // Saved networks read as green cards with a * on the SSID.
+    String title = wifiEntries[index].ssid.length() ? wifiEntries[index].ssid
+                                                     : String("<hidden>");
+    if (saved) title += " *";
+    char det[48];
+    snprintf(det, sizeof(det), "%ld dBm  ch%ld  %sG  %s",
+             static_cast<long>(wifiEntries[index].rssi),
+             static_cast<long>(wifiEntries[index].channel),
+             bandLabel(wifiEntries[index].channel),
+             authShortLabel(wifiEntries[index].auth));
+    drawMenuCard(kMenuFirstY + row * kMenuRowPitch, title, det,
+                 saved ? kGood : kAccent);
   }
   if (wifiCount == 0) {
     display.setTextColor(kMuted, kBackground);
@@ -993,13 +1115,13 @@ void drawSavedNetworks() {
 }
 
 int blePageCount() {
-  return max(1, (bleCount + kVisibleRows - 1) / kVisibleRows);
+  return max(1, (bleCount + kMenuPerPage - 1) / kMenuPerPage);
 }
 
-// Maps a visible row to the retained result; the last page may be partial.
+// Maps a visible card row to the retained result; the last page may be partial.
 int bleResultIndex(int row) {
-  if (row < 0 || row >= kVisibleRows) return -1;
-  const int index = blePage * kVisibleRows + row;
+  if (row < 0 || row >= kMenuPerPage) return -1;
+  const int index = blePage * kMenuPerPage + row;
   return index >= 0 && index < bleCount ? index : -1;
 }
 
@@ -1013,24 +1135,18 @@ void drawBleResults() {
   detail +=
       lastBleScanSdWriteOk ? "saved" : (sdReady ? "write error" : "missing");
   drawHeader("BLE RESULTS", detail);
-#ifdef AWOK_MINI_DISPLAY
-  display.selectableRows(min(kVisibleRows, bleCount - blePage * kVisibleRows));
-#endif
-  display.setTextSize(1);
-  for (int row = 0; row < kVisibleRows; ++row) {
+  for (int row = 0; row < kMenuPerPage; ++row) {
     const int i = bleResultIndex(row);
     if (i < 0) break;
-    const int y = 48 + row * 22;
-    display.setTextColor(ILI9341_WHITE, kBackground);
-    display.setCursor(5, y);
-    display.print(clipped(bleEntries[i].flipperLike
-                              ? String("[F?] ") + bleEntries[i].name
-                              : bleEntries[i].name.length() ? bleEntries[i].name : "<unnamed>",
-                          20));
-    display.setTextColor(kMuted, kBackground);
-    display.setCursor(5, y + 11);
-    display.printf("%4ld dBm  %s", static_cast<long>(bleEntries[i].rssi),
-                   bleEntries[i].address.c_str());
+    String title = bleEntries[i].flipperLike ? String("[F?] ") + bleEntries[i].name
+                   : bleEntries[i].name.length() ? bleEntries[i].name
+                                                 : String("<unnamed>");
+    char det[48];
+    snprintf(det, sizeof(det), "%ld dBm  %s", static_cast<long>(bleEntries[i].rssi),
+             bleEntries[i].address.c_str());
+    // Flipper-like advertisers flagged red.
+    drawMenuCard(kMenuFirstY + row * kMenuRowPitch, title, det,
+                 bleEntries[i].flipperLike ? kBad : kAccent);
   }
   if (bleCount == 0) {
     display.setTextColor(kMuted, kBackground);
@@ -1581,29 +1697,48 @@ void updateWifiSignalMonitor() {
   drawWifiSignalMonitor();
 }
 
-// Keep each Recon category small enough to scan on Touch and Mini. Network
-// Tools already has its own menu, so it opens directly from the picker.
+// Recon groups and tools render as Network-Tools-style cards (a title plus a
+// one-line description). Network Tools has its own menu, so it opens directly
+// from the picker.
 const char* const kReconCategories[] = {
     "Wi-Fi", "Bluetooth", "RF & Packets", "Field Tools", "Network Tools"};
+const char* const kReconCategoryDetails[] = {
+    "Scan, audit, WPS, hidden, HE",
+    "BLE scan, trackers, intel",
+    "Channels, spectrum, capture",
+    "Clients, cameras, harvest, RDF",
+    "LAN hosts, ports, services"};
 constexpr int kReconCategoryCount =
     static_cast<int>(sizeof(kReconCategories) / sizeof(kReconCategories[0]));
+static_assert(sizeof(kReconCategoryDetails) / sizeof(kReconCategoryDetails[0]) ==
+                  kReconCategoryCount,
+              "Recon category details must cover every group");
 struct ReconMenuItem {
   const char* label;
+  const char* detail;
   int category;
 };
 const ReconMenuItem kReconItems[] = {
-    {"Wi-Fi Scan", 0}, {"Saved", 0}, {"WPS Scan", 0},
-    {"Hidden SSID", 0}, {"Security Audit", 0}, {"Wi-Fi 6 Intel", 0},
-    {"BLE Scan", 1}, {"BLE Trackers", 1}, {"BLE Intel", 1},
-    {"Channel Map", 2}, {"Spectrogram", 2}, {"Packet Mon", 2},
-    {"Clients", 3}, {"Cameras", 3}, {"Harvester", 3},
-    {"Probe Intel", 3}, {"Fleet Hunter", 3}, {"Topology Map", 3}};
+    {"Wi-Fi Scan", "Discover 2.4/5 GHz access points", 0},
+    {"Saved", "Networks kept across reboots", 0},
+    {"WPS Scan", "APs advertising WPS setup", 0},
+    {"Hidden SSID", "Reveal hidden network names", 0},
+    {"Security Audit", "Rank AP encryption posture", 0},
+    {"Wi-Fi 6 Intel", "802.11ax HE capability decode", 0},
+    {"BLE Scan", "Discover BLE advertisers", 1},
+    {"BLE Trackers", "Flag AirTags / Tile / SmartTag", 1},
+    {"BLE Intel", "Decode vendor BLE payloads", 1},
+    {"Channel Map", "2.4/5 GHz channel occupancy", 2},
+    {"Spectrogram", "RF waterfall & duty cycle", 2},
+    {"Packet Mon", "Promiscuous pcap capture", 2},
+    {"Clients", "Probe-request station sniffer", 3},
+    {"Cameras", "Flag surveillance cameras", 3},
+    {"Harvester", "Passive EAPOL / PMKID grab", 3},
+    {"Probe Intel", "Preferred-network probe leaks", 3},
+    {"Fleet Hunter", "Multi-node RDF trilateration", 3},
+    {"Topology Map", "Client / AP association graph", 3}};
 constexpr int kReconItemCount =
     static_cast<int>(sizeof(kReconItems) / sizeof(kReconItems[0]));
-constexpr int kMenuPerPage = 6;
-constexpr int kMenuFirstY = 50;
-constexpr int kMenuRowPitch = 32;
-constexpr int kMenuRowHeight = 30;
 
 int reconVisibleItemCount() {
   if (reconCategory < 0) return kReconCategoryCount;
@@ -1631,6 +1766,16 @@ String reconItemLabel(int index) {
     return "Saved (" + String(savedCount) + ")";
   }
   return String(kReconItems[index].label);
+}
+
+String reconItemDetail(int index) {
+  if (index < 0 || index >= kReconItemCount) return "";
+  return String(kReconItems[index].detail);
+}
+
+// One Recon menu card: a bold title over a muted description (shared renderer).
+void drawReconCard(int row, const String& title, const String& detail) {
+  drawMenuCard(kMenuFirstY + row * kMenuRowPitch, title, detail, kAccent);
 }
 
 void launchReconItem(int index) {
@@ -1688,99 +1833,206 @@ void drawReconMenu() {
   const int pages = reconPageCount();
   if (reconPage < 0 || reconPage >= pages) reconPage = 0;
   display.fillScreen(kBackground);
-  const String title = reconCategory < 0 ? "RECON" : kReconCategories[reconCategory];
-  const String detail = reconCategory < 0 ? "choose a tool group" : "Recon / " + title;
-  drawHeader(title, pages > 1 ? detail + " " + String(reconPage + 1) +
-                                      "/" + String(pages) : detail);
+  const bool picker = reconCategory < 0;
+  const String title = picker ? "RECON" : kReconCategories[reconCategory];
+  String detail = picker ? "choose a tool group" : "Recon / " + title;
+  if (pages > 1) detail += " " + String(reconPage + 1) + "/" + String(pages);
+  drawHeader(title, detail);
   const int start = reconPage * kMenuPerPage;
   for (int row = 0; row < kMenuPerPage; ++row) {
     const int position = start + row;
     if (position >= reconVisibleItemCount()) break;
-    const String label = reconCategory < 0 ? String(kReconCategories[position])
-                                          : reconItemLabel(reconItemIndex(position));
-    drawButton(12, kMenuFirstY + row * kMenuRowPitch, 216, kMenuRowHeight, label);
+    if (picker) {
+      drawReconCard(row, kReconCategories[position],
+                    kReconCategoryDetails[position]);
+    } else {
+      const int index = reconItemIndex(position);
+      drawReconCard(row, reconItemLabel(index), reconItemDetail(index));
+    }
   }
-  if (pages > 1) {
-    drawThreeButtonFooter("< Back", "< Prev", "Next >");
-  } else if (reconCategory < 0) {
-    drawFooter("Home", "Home");
-  } else {
-    drawFooter("< Groups", "Home");
+  // Footer matches Network Tools: Back (Home from the picker, Groups from a
+  // tool list), then Prev/Next only while more pages remain.
+  drawSmallButton(4, 280, 72, 36, picker ? "Home" : "Groups", kMuted);
+  if (reconPage > 0) drawSmallButton(84, 280, 72, 36, "Prev", kAccent);
+  if (reconPage + 1 < pages) drawSmallButton(164, 280, 72, 36, "Next", kAccent);
+}
+
+// Stable tool indices; grouping changes navigation only, not commands or View IDs.
+const char* const kMonitorItems[] = {
+    "Deauth Watch", "Rogue Watch", "BLE Spam Watch", "Karma Watch",
+    "Beacon Watch", "Auth Flood", "Advanced Watch", "Deauth Forensics"};
+const char* const kMonitorDescriptions[] = {
+    "Detect disconnect-frame bursts", "Spot possible AP impersonation",
+    "Detect Bluetooth advert floods", "Flag one AP posing as many SSIDs",
+    "Watch for fake-AP beacon floods", "Detect auth / association floods",
+    "Combined Wi-Fi / BLE anomalies", "Inspect disconnect-frame evidence"};
+const uint8_t kMonitorGroups[] = {0, 0, 1, 0, 0, 0, 2, 2};
+const char* const kMonitorCategories[] = {"WI-FI", "BLUETOOTH", "ADVANCED"};
+constexpr int kMonitorItemCount = sizeof(kMonitorItems) / sizeof(kMonitorItems[0]);
+constexpr int kMonitorPerPage = 4;
+static_assert(sizeof(kMonitorGroups) / sizeof(kMonitorGroups[0]) == kMonitorItemCount, "Monitor groups must cover every tool");
+static_assert(sizeof(kMonitorDescriptions) / sizeof(kMonitorDescriptions[0]) == kMonitorItemCount, "Monitor descriptions must cover every tool");
+
+bool monitorItemRunning(int index) {
+  switch (index) {
+    case 0: return deauthMonitorActive;
+    case 1: return rogueWatchActive;
+    case 2: return bleDetectActive;
+    case 3: return karmaWatchActive;
+    case 4: return beaconWatchActive;
+    case 5: return authFloodActive;
+    case 6: return advancedWatchActive;
+    case 7: return deauthForensicsActive;
+    default: return false;
   }
 }
 
-// Data-driven Monitor menu (mirrors the Recon menu): append an item here plus a
-// case in launchMonitorItem and it paginates automatically. 6 items per page.
-const char* const kMonitorItems[] = {
-    "Deauth Watch",   "Rogue Watch", "BLE Spam Watch",
-    "Karma Watch",    "Beacon Watch", "Auth Flood",
-    "Advanced Watch", "Deauth Forensics"};
-constexpr int kMonitorItemCount =
-    static_cast<int>(sizeof(kMonitorItems) / sizeof(kMonitorItems[0]));
+int monitorVisibleCount() {
+  if (monitorCategory < 0) return 3;
+  int count = 0;
+  for (int i = 0; i < kMonitorItemCount; ++i) if (kMonitorGroups[i] == monitorCategory) ++count;
+  return count;
+}
 
-int monitorPageCount() {
-  return (kMonitorItemCount + kMenuPerPage - 1) / kMenuPerPage;
+int monitorItemIndex(int position) {
+  if (position < 0 || monitorCategory < 0) return -1;
+  for (int i = 0; i < kMonitorItemCount; ++i)
+    if (kMonitorGroups[i] == monitorCategory && position-- == 0) return i;
+  return -1;
+}
+
+int monitorPageCount() { return max(1, (monitorVisibleCount() + kMonitorPerPage - 1) / kMonitorPerPage); }
+
+void setMonitorOrigin(int index) {
+  if (index < 0 || index >= kMonitorItemCount) return;
+  monitorCategory = kMonitorGroups[index];
+  int position = 0;
+  for (int i = 0; i < index; ++i) if (kMonitorGroups[i] == monitorCategory) ++position;
+  monitorPage = position / kMonitorPerPage;
 }
 
 void launchMonitorItem(int index) {
-  const String label = kMonitorItems[index];
-  if (label == "Deauth Watch") {
-    startDeauthMonitor();
-  } else if (label == "Rogue Watch") {
-    startRogueWatch();
-  } else if (label == "BLE Spam Watch") {
-    startBleDetect();
-  } else if (label == "Karma Watch") {
-    startKarmaWatch();
-  } else if (label == "Beacon Watch") {
-    startBeaconWatch();
-  } else if (label == "Auth Flood") {
-    startAuthFlood();
-  } else if (label == "Advanced Watch") {
-    startAdvancedWatch();
-  } else if (label == "Deauth Forensics") {
-    startDeauthForensics();
+  if (index < 0 || index >= kMonitorItemCount) return;
+  setMonitorOrigin(index);
+  const bool running = monitorItemRunning(index);
+  switch (index) {
+    case 0: if (running) drawDeauthMonitor(); else startDeauthMonitor(); break;
+    case 1: if (running) drawRogueWatch(); else startRogueWatch(); break;
+    case 2: if (running) drawBleDetect(); else startBleDetect(); break;
+    case 3: if (running) drawKarmaWatch(); else startKarmaWatch(); break;
+    case 4: if (running) drawBeaconWatch(); else startBeaconWatch(); break;
+    case 5: if (running) drawAuthFlood(); else startAuthFlood(); break;
+    case 6: if (running) drawAdvancedWatch(); else startAdvancedWatch(); break;
+    case 7: if (running) drawDeauthForensics(); else startDeauthForensics(); break;
   }
 }
 
+void returnToMonitor(int index) {
+  if (index < 0 || index >= kMonitorItemCount) return;
+  // Also derive the correct group when a tool was launched via serial/Bluetooth.
+  setMonitorOrigin(index);
+  if (monitorItemRunning(index)) {
+    switch (index) {
+      case 0: stopDeauthMonitor(); break;
+      case 1: stopRogueWatch(); break;
+      case 2: stopBleDetect(); break;
+      case 3: stopKarmaWatch(); break;
+      case 4: stopBeaconWatch(); break;
+      case 5: stopAuthFlood(); break;
+      case 6: stopAdvancedWatch(); break;
+      case 7: stopDeauthForensics(); break;
+    }
+  }
+  drawMonitorMenu();
+}
+
+void drawMonitorHeader(const String& title, bool running, const String& detail) {
+  drawHeader(title, String(running ? "Running | " : "Stopped | ") + detail);
+}
+
+void openMonitorMenu() { monitorCategory = -1; monitorPage = 0; drawMonitorMenu(); }
+
 void drawMonitorMenu() {
   currentView = View::kMonitor;
+  if (monitorCategory < -1 || monitorCategory > 2) monitorCategory = -1;
   const int pages = monitorPageCount();
-  if (monitorPage >= pages) monitorPage = 0;
+  monitorPage = max(0, min(monitorPage, pages - 1));
   display.fillScreen(kBackground);
-  drawHeader("MONITOR", pages > 1 ? "detect attacks  " + String(monitorPage + 1) +
-                                        "/" + String(pages)
-                                  : "detect attacks in the air");
-  const int start = monitorPage * kMenuPerPage;
-  for (int row = 0; row < kMenuPerPage; ++row) {
-    const int index = start + row;
-    if (index >= kMonitorItemCount) break;
-    drawButton(12, kMenuFirstY + row * kMenuRowPitch, 216, kMenuRowHeight,
-               kMonitorItems[index]);
+  drawHeader(monitorCategory < 0 ? "MONITOR" : kMonitorCategories[monitorCategory],
+      monitorCategory < 0 ? "choose a detector group" : "Monitor | " + String(monitorPage + 1) + "/" + String(pages));
+  for (int row = 0; row < kMonitorPerPage; ++row) {
+    const int position = monitorPage * kMonitorPerPage + row;
+    if (position >= monitorVisibleCount()) break;
+    const int y = kMenuFirstY + row * kMenuRowPitch;
+    if (monitorCategory < 0) {
+      int count = 0, active = 0;
+      for (int i = 0; i < kMonitorItemCount; ++i) if (kMonitorGroups[i] == position) {
+        ++count; if (monitorItemRunning(i)) ++active;
+      }
+      // Running state rides the card outline (green) plus the count line.
+      drawMenuCard(y, kMonitorCategories[position],
+                   String(count) + (count == 1 ? " tool, " : " tools, ") + String(active) + " running",
+                   active > 0 ? kGood : kAccent);
+    } else {
+      const int index = monitorItemIndex(position);
+      const bool running = monitorItemRunning(index);
+      drawMenuCard(y, kMonitorItems[index],
+                   running ? "Running - tap to view" : String(kMonitorDescriptions[index]),
+                   running ? kGood : kAccent);
+    }
   }
-  if (pages > 1) {
-    drawThreeButtonFooter("Home", "< Prev", "Next >");
+  if (monitorCategory < 0) drawSmallButton(4, 280, 232, 36, "Home", kMuted);
+  else if (pages == 1) {
+    drawSmallButton(4, 280, 112, 36, "Groups", kMuted);
+    drawSmallButton(124, 280, 112, 36, "Home", kAccent);
   } else {
-    drawFooter("Home", "Home");
+    drawSmallButton(4, 280, 72, 36, "Groups", kMuted);
+    if (monitorPage > 0) drawSmallButton(84, 280, 72, 36, "Prev", kAccent);
+    if (monitorPage + 1 < pages) drawSmallButton(164, 280, 72, 36, "Next", kAccent);
   }
 }
+
+void handleMonitorTouch(int x, int y) {
+  for (int row = 0; row < kMonitorPerPage; ++row) {
+    if (!gpsMenuHit(x, y, 8, kMenuFirstY + row * kMenuRowPitch, 224, kMenuCardHeight)) continue;
+    const int position = monitorPage * kMonitorPerPage + row;
+    if (position >= monitorVisibleCount()) return;
+    if (monitorCategory < 0) { monitorCategory = position; monitorPage = 0; drawMonitorMenu(); }
+    else launchMonitorItem(monitorItemIndex(position));
+    return;
+  }
+  if (monitorCategory < 0) {
+    if (gpsMenuHit(x, y, 4, 280, 232, 36)) drawHome();
+  } else if (monitorPageCount() == 1) {
+    if (gpsMenuHit(x, y, 4, 280, 112, 36)) openMonitorMenu();
+    else if (gpsMenuHit(x, y, 124, 280, 112, 36)) drawHome();
+  } else {
+    if (gpsMenuHit(x, y, 4, 280, 72, 36)) openMonitorMenu();
+    else if (gpsMenuHit(x, y, 84, 280, 72, 36) && monitorPage > 0) { --monitorPage; drawMonitorMenu(); }
+    else if (gpsMenuHit(x, y, 164, 280, 72, 36) && monitorPage + 1 < monitorPageCount()) { ++monitorPage; drawMonitorMenu(); }
+  }
+}
+
+// Attack tools as danger-red cards, matching the shared menu look. The four
+// entries fit one page, so the footer is a single Home button.
+const char* const kAttackLabels[] = {"Beacon Flood", "Evil Portal", "Evil Twin",
+                                     "Probe Lure"};
+const char* const kAttackDetails[] = {
+    "Flood fake AP beacons", "Captive-portal credential grab",
+    "Clone the last-scanned AP", "Answer probes to lure clients"};
+constexpr int kAttackCount =
+    static_cast<int>(sizeof(kAttackLabels) / sizeof(kAttackLabels[0]));
 
 void drawAttacksMenu() {
   currentView = View::kAttacks;
   display.fillScreen(kBackground);
   drawHeader("ATTACK TOOLS", "active RF | authorized use only");
-  drawButton(12, 44, 216, 38, "Beacon Flood");
-  drawButton(12, 86, 216, 38, "Evil Portal");
-  drawButton(12, 128, 216, 38, "Evil Twin");
-  drawButton(12, 170, 216, 38, "Probe Lure");
-  display.setTextSize(1);
-  display.setTextColor(kMuted, kBackground);
-  display.setCursor(18, 216);
-  display.print("Evil Twin/Probe Lure use the last-");
-  display.setCursor(18, 228);
-  display.print("scanned SSID. Deauth: under an AP.");
+  for (int row = 0; row < kAttackCount; ++row) {
+    drawMenuCard(kMenuFirstY + row * kMenuRowPitch, kAttackLabels[row],
+                 kAttackDetails[row], kBad);
+  }
   drawConfirmBanner();
-  drawFooter("Home", "Home");
+  drawSmallButton(4, 280, 232, 36, "Home", kMuted);
 }
 
 void sortWifi() {
@@ -1827,7 +2079,7 @@ void showToolMemoryError(const char* tool) {
   Serial.printf("[memory] %s: buffer allocation failed; tool not started\n", tool);
   logMemory(tool);
   currentView = View::kHome;
-  homePage = 1;
+  homeOverlay = true;  // any tap returns to the Home tiles
   signalMonitorActive = false;
   display.fillScreen(kBackground);
   drawHeader("MEMORY LOW", tool);
@@ -1841,9 +2093,9 @@ void showToolMemoryError(const char* tool) {
 }
 
 void showRadioError(const char* message) {
-  // Reuse the Home/About return handler: either footer goes back to Home.
+  // Reuse the Home overlay return handler: either footer goes back to Home.
   currentView = View::kHome;
-  homePage = 1;
+  homeOverlay = true;
   signalMonitorActive = false;
   display.fillScreen(kBackground);
   drawHeader("RADIO ERROR", message);
@@ -2369,8 +2621,10 @@ void loop() {
   if (!resultTablesReady) { delay(50); return; }
 #endif
   updateGps();
+  updateWardriveSessionStats();
 #ifdef AWOK_HEADLESS
   bridgeServiceFileTransfer();
+  bridgeServiceWardriveDashboard();
   if (bridgeFileTransferActive()) {
     // Keep radio-owning tools from hopping away during a reliable download.
     bridgeServiceCommand();
@@ -2433,8 +2687,9 @@ void loop() {
   static uint32_t lastGpsScreenDrawMs = 0;
   if (currentView == View::kGps && millis() - lastGpsScreenDrawMs >= 1000) {
     lastGpsScreenDrawMs = millis();
-    drawGps();
+    redrawGpsPage();
   }
+  updateSettingsPage();
 #ifdef AWOK_MINI_DISPLAY
   // Mini screen test writes the ST7735 directly, so skip the canvas blit there.
   if (currentView != View::kScreenTest) display.present();

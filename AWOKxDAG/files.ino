@@ -3,23 +3,28 @@
 // AWOKxDAG — capture / SD file manager (compiled as part of the sketch; see
 // awok_common.h)
 //
-// Lists the files under /awokxdag with sizes, paginated so every file is
-// reachable, and lets you delete one behind a two-tap confirm. Reached from the
-// Status screen.
-
+// Bounded capture browser. The remote protocol continues to use fileRows indices;
+// filtering changes only the board's view map, never the transfer index.
 constexpr int kMaxFileRows = 64;
+constexpr int kFilesPerPage = 4;
+constexpr int kFileCardTop = 88, kFileCardPitch = 44, kFileCardHeight = 40;
 
 struct FileRow {
   String name;
   uint32_t size;
+  time_t modified = 0;
 };
 
 FileRow fileRows[kMaxFileRows];
-int fileRowCount = 0;
-int fileSelected = -1;  // absolute index, -1 = none
+int fileRowCount = 0, fileDirectoryCount = 0;
+int fileSelected = -1;
 bool fileConfirmDelete = false;
 uint64_t fileTotalBytes = 0;
-int filePage = 0;
+int filePage = 0, fileFilter = 0, fileViewMode = 0; // 0 list, 1 filters, 2 details
+int fileViewRows[kMaxFileRows], fileViewCount = 0;
+uint32_t fileListRevision = 0, fileDrawRevision = 0;
+String fileNotice;
+const char* const kFileFilters[] = {"All captures", "Wardrive", "PCAP", "Logs / other"};
 
 String fileBaseName(const String& n) {
   const int slash = n.lastIndexOf('/');
@@ -31,54 +36,132 @@ String fileFullPath(const String& n) {
   return String(kSdDirectory) + "/" + n;
 }
 
-int filePageCount() {
-  if (fileRowCount == 0) return 1;
-  return (fileRowCount + kVisibleRows - 1) / kVisibleRows;
+int fileKind(const String& path) {
+  String name = fileBaseName(path);
+  name.toLowerCase();
+  if (name.startsWith("wardrive") && name.endsWith(".csv")) return 1;
+  if (name.endsWith(".pcap") || name.endsWith(".pcapng") || name.endsWith(".cap")) return 2;
+  return 3;
+}
+
+// Valid SD timestamps sort ahead of unknown timestamps. Filename order is a
+// deterministic fallback (generated wardrive names are zero-padded).
+bool fileIsNewer(time_t modified, const String& name, int other) {
+  if (modified != fileRows[other].modified) return modified > fileRows[other].modified;
+  return fileBaseName(name).compareTo(fileBaseName(fileRows[other].name)) > 0;
+}
+
+void refreshFileView() {
+  fileViewCount = 0;
+  for (int i = 0; i < fileRowCount; ++i)
+    if (fileFilter == 0 || fileKind(fileRows[i].name) == fileFilter) fileViewRows[fileViewCount++] = i;
+  const int pages = max(1, (fileViewCount + kFilesPerPage - 1) / kFilesPerPage);
+  filePage = max(0, min(filePage, pages - 1));
+}
+
+int filePageCount() { return max(1, (fileViewCount + kFilesPerPage - 1) / kFilesPerPage); }
+
+bool fileButtonHit(int x, int y, int left, int top, int width, int height) {
+  return x >= left && x < left + width && y >= top && y < top + height;
+}
+
+bool fileSelectionProtected() {
+  return fileSelected >= 0 && fileSelected < fileRowCount && g_wardriveFile &&
+         fileFullPath(fileRows[fileSelected].name) == g_wardriveCsvPath;
+}
+
+String fileSizeLabel(uint32_t bytes) {
+  if (bytes >= 1024 * 1024) return String(bytes / 1048576.0, 1) + " MB";
+  if (bytes >= 1024) return String(bytes / 1024.0, 1) + " KB";
+  return String(bytes) + " B";
+}
+
+String fileModifiedLabel(time_t stamp) {
+  if (stamp <= 0) return "Unknown";
+  struct tm local = {};
+  if (!localtime_r(&stamp, &local)) return "Unknown";
+  char text[24];
+  strftime(text, sizeof(text), "%Y-%m-%d %H:%M", &local);
+  return String(text);
 }
 
 void drawFilesManager() {
   currentView = View::kFiles;
-  const int pages = filePageCount();
-  if (filePage >= pages) filePage = 0;
+  refreshFileView();
+  fileDrawRevision = fileListRevision;
+  if (fileViewMode == 2 && (fileSelected < 0 || fileSelected >= fileRowCount)) fileViewMode = 0;
   display.fillScreen(kBackground);
-  drawHeader("CAPTURES",
-             String(fileRowCount) + " files | " +
-                 String(static_cast<uint32_t>(fileTotalBytes / 1024)) +
-                 " KB | pg " + String(filePage + 1) + "/" + String(pages));
-  display.setTextSize(1);
-  const int start = filePage * kVisibleRows;
-#ifdef AWOK_MINI_DISPLAY
-  display.selectableRows(min(kVisibleRows, fileRowCount - start));
-#endif
-  for (int row = 0; row < kVisibleRows; ++row) {
-    const int idx = start + row;
-    if (idx >= fileRowCount) break;
-    const int y = 48 + row * 22;
-    display.setTextColor(idx == fileSelected ? kAccent : ILI9341_WHITE,
-                         kBackground);
-    display.setCursor(5, y);
-    display.print(clipped(fileBaseName(fileRows[idx].name), 26));
-    display.setTextColor(kMuted, kBackground);
-    display.setCursor(5, y + 11);
-    if (fileRows[idx].size >= 1024) {
-      display.printf("%lu KB",
-                     static_cast<unsigned long>(fileRows[idx].size / 1024));
-    } else {
-      display.printf("%lu B", static_cast<unsigned long>(fileRows[idx].size));
+  if (fileViewMode == 1) {
+    drawHeader("FILE FILTERS", "choose a type or refresh the SD");
+    for (int i = 0; i < 4; ++i)
+      drawSmallButton(8, 46 + i * 44, 224, 40,
+          String(fileFilter == i ? "> " : "") + kFileFilters[i], fileFilter == i ? kGood : kAccent);
+    drawSmallButton(8, 222, 224, 40, "Refresh SD list", kAccent);
+    drawSmallButton(4, 280, 112, 36, "Back", kMuted);
+    drawSmallButton(124, 280, 112, 36, "Home", kAccent);
+    return;
+  }
+  if (fileViewMode == 2) {
+    drawHeader(fileConfirmDelete ? "DELETE FILE?" : "FILE DETAILS", fileConfirmDelete ? "permanent removal from SD" : "Captures / selected file");
+    const String name = fileBaseName(fileRows[fileSelected].name);
+    display.setTextSize(1); display.setTextColor(ILI9341_WHITE, kBackground);
+    for (int line = 0; line < 4 && line * 37 < int(name.length()); ++line) {
+      display.setCursor(8, 50 + line * 12);
+      display.print(line == 3 ? clipped(name.substring(line * 37), 37) : name.substring(line * 37, (line + 1) * 37));
     }
-  }
-  if (fileRowCount == 0) {
     display.setTextColor(kMuted, kBackground);
-    display.setCursor(40, 140);
-    display.print(sdReady ? "No files in /awokxdag" : "SD not mounted");
+    display.setCursor(8, 106); display.print(String("Type: ") + kFileFilters[fileKind(name)]);
+    display.setCursor(8, 120); display.print("Size: " + String(fileRows[fileSelected].size) + " bytes");
+    display.setCursor(8, 134); display.print("Modified: " + fileModifiedLabel(fileRows[fileSelected].modified));
+    display.setCursor(8, 160); display.print("Preview / download on your phone:");
+    display.setCursor(8, 174); display.print("Website > SD Files > select file");
+    if (fileNotice.length() || fileSelectionProtected()) {
+      display.setTextColor(kWarn, kBackground); display.setCursor(8, 196);
+      display.print(fileSelectionProtected() ? "Stop wardriving before deleting." : clipped(fileNotice, 37));
+    }
+    if (fileConfirmDelete) {
+      drawSmallButton(8, 220, 224, 42, "Delete this file", kBad);
+      drawSmallButton(4, 280, 232, 36, "Cancel", kMuted);
+    } else {
+      drawSmallButton(4, 280, 112, 36, "Back", kMuted);
+      if (!fileSelectionProtected()) drawSmallButton(124, 280, 112, 36, "Delete...", kBad);
+    }
+    return;
   }
-  const char* action =
-      fileSelected >= 0 ? (fileConfirmDelete ? "OK!" : "Del") : "Resc";
-  drawFourButtonFooter("Back", "< Prev", "Next >", action);
+  String detail = String(fileViewCount) + " matches | " + String(filePage + 1) + "/" + String(filePageCount());
+  if (fileDirectoryCount > kMaxFileRows) detail = "Newest 64 of " + String(fileDirectoryCount) + " | " + String(filePage + 1) + "/" + String(filePageCount());
+  drawHeader("CAPTURES", detail);
+  drawSmallButton(8, 44, 224, 38, String(kFileFilters[fileFilter]) + " / Filter & refresh", kAccent);
+  const int start = filePage * kFilesPerPage;
+  for (int row = 0; row < kFilesPerPage && start + row < fileViewCount; ++row) {
+    const int idx = fileViewRows[start + row], y = kFileCardTop + row * kFileCardPitch;
+    const String name = fileBaseName(fileRows[idx].name);
+#ifdef AWOK_MINI_DISPLAY
+    display.button(8, y, 224, kFileCardHeight,
+        (name + " | " + fileSizeLabel(fileRows[idx].size)).c_str(), kAccent);
+#else
+    display.drawRoundRect(8, y, 224, kFileCardHeight, 4, kPanel);
+    display.setTextSize(1); display.setTextColor(ILI9341_WHITE, kBackground);
+    display.setCursor(16, y + 7); display.print(clipped(name, 34));
+    display.setTextColor(kMuted, kBackground); display.setCursor(16, y + 24);
+    display.print(fileSizeLabel(fileRows[idx].size) + " | " + kFileFilters[fileKind(name)]);
+#endif
+  }
+  if (!fileViewCount) {
+    display.setTextSize(1); display.setTextColor(kMuted, kBackground);
+    display.setCursor(12, 120); display.print(!sdReady ? "SD not mounted" : fileRowCount ? "No files match this filter" : "No captures on SD");
+    display.setCursor(12, 138); display.print("Use Filter & refresh above.");
+  }
+  display.setTextSize(1); display.setTextColor(fileNotice.length() ? kWarn : kMuted, kBackground);
+  display.setCursor(8, 268); display.print(fileNotice.length() ? clipped(fileNotice, 37) : "Newest first | tap a file for details");
+  drawSmallButton(4, 280, 72, 36, "Back", kMuted);
+  if (filePage > 0) drawSmallButton(84, 280, 72, 36, "Prev", kAccent);
+  if (filePage + 1 < filePageCount()) drawSmallButton(164, 280, 72, 36, "Next", kAccent);
 }
 
 bool scanSdFiles() {
-  fileRowCount = 0;
+  ++fileListRevision;
+  fileRowCount = fileDirectoryCount = 0;
   fileSelected = -1;
   fileConfirmDelete = false;
   fileTotalBytes = 0;
@@ -86,22 +169,44 @@ bool scanSdFiles() {
   File dir = SD.open(kSdDirectory);
   if (!dir || !dir.isDirectory()) return false;
   File entry = dir.openNextFile();
-  while (entry && fileRowCount < kMaxFileRows) {
+  while (entry) {
     if (!entry.isDirectory()) {
-      fileRows[fileRowCount].name = String(entry.name());
-      fileRows[fileRowCount].size = entry.size();
-      fileTotalBytes += entry.size();
-      ++fileRowCount;
+      ++fileDirectoryCount;
+      const String name = String(entry.name());
+      const time_t modified = max(time_t(0), entry.getLastWrite());
+      int slot = fileRowCount;
+      if (slot == kMaxFileRows) {
+        slot = 0;
+        for (int i = 1; i < fileRowCount; ++i)
+          if (fileIsNewer(fileRows[slot].modified, fileRows[slot].name, i)) slot = i;
+        if (!fileIsNewer(modified, name, slot)) slot = -1;
+      } else ++fileRowCount;
+      if (slot >= 0) {
+        fileRows[slot].name = name;
+        fileRows[slot].size = entry.size();
+        fileRows[slot].modified = modified;
+      }
     }
+    entry.close();
     entry = dir.openNextFile();
+    if (fileDirectoryCount % 32 == 0) delay(1);  // yield in large directories
   }
   dir.close();
+  for (int i = 1; i < fileRowCount; ++i) {
+    int j = i;
+    while (j > 0 && fileIsNewer(fileRows[j].modified, fileRows[j].name, j - 1)) {
+      const FileRow temp = fileRows[j - 1];
+      fileRows[j - 1] = fileRows[j]; fileRows[j] = temp; --j;
+    }
+  }
+  for (int i = 0; i < fileRowCount; ++i) fileTotalBytes += fileRows[i].size;
   return true;
 }
 
 void openFilesManager() {
-  filePage = 0;
-  scanSdFiles();
+  filePage = fileFilter = fileViewMode = 0;
+  fileNotice = "";
+  if (!scanSdFiles()) fileNotice = "SD list failed; try Refresh.";
   drawFilesManager();
 }
 
@@ -334,6 +439,7 @@ static std::atomic<uint32_t> fileReliableToken{0};
 static std::atomic<uint32_t> fileReliableWaitingSeq{0};
 
 bool linkReliableFileActive() { return fileReliableToken.load() != 0; }
+bool linkReliableFileTokenMatches(uint32_t token) { return token != 0 && token == fileReliableToken.load(); }
 
 void linkReceiveFileAck(uint32_t token, uint32_t seq) {
   if (token == 0 || token != fileReliableToken.load()) return;
@@ -416,6 +522,96 @@ void linkStreamFileReliable(uint8_t index, uint32_t token) {
   fileReliableWaitingSeq.store(0);
 }
 
+// Snapshot-based transfer: checksum the selected byte range before accepting a
+// resume. A growing CSV may resume its original prefix; a changed/truncated file
+// must restart. The browser also validates name, size and CRC before ACKing the
+// manifest, so a reordered directory can never silently substitute another file.
+void linkStreamFileVerified(uint8_t index, uint32_t token, uint32_t startSeq,
+                            uint32_t snapshotBytes, uint32_t expectedCrc) {
+  g_fileStreamAborted = false;
+  fileReliableToken.store(token);
+  AxdFileChunkMsg chunk;
+  chunk.token = token;
+  chunk.seq = 1;
+  const char* error = nullptr;
+  File file;
+  String base;
+  if (!ensureSdCard()) error = "SD_UNAVAILABLE";
+  if (!error && (fileRowCount == 0 || index >= fileRowCount)) scanSdFiles();
+  if (!error && index >= fileRowCount) error = "FILE_NOT_FOUND";
+  if (!error) {
+    const String path = fileFullPath(fileRows[index].name);
+    base = fileBaseName(fileRows[index].name);
+    if (path == g_wardriveCsvPath) flushWardriveCsv();
+    file = SD.open(path.c_str(), FILE_READ);
+    if (!file) error = "CANNOT_OPEN";
+  }
+  uint32_t checksum = 0, prefixState = 0xffffffffU;
+  uint32_t offset = 0, total = 1;
+  if (!error) {
+    chunk.totalBytes = startSeq ? snapshotBytes : file.size();
+    total = chunk.totalBytes / kFileChunkBytes + (chunk.totalBytes % kFileChunkBytes != 0);
+    if (!total) total = 1;
+    if (file.size() < chunk.totalBytes) error = "FILE_CHANGED: restart download";
+    else if (startSeq > total + 1) error = "INVALID_RESUME";
+    else offset = startSeq > total ? chunk.totalBytes : startSeq ? (startSeq - 1) * kFileChunkBytes : 0;
+  }
+  uint8_t raw[kFileChunkBytes];
+  if (!error) {
+    uint32_t state = 0xffffffffU, readBytes = 0, lastProgress = millis();
+    // ACKed progress also keeps the bridge parked during a long SD hash pass.
+    chunk.kind = 5; chunk.seq = 0xfffffffeU;
+    strcpy(chunk.data, "Checking SD snapshot");
+    if (!fileSendReliable(chunk)) error = "NO_BROWSER_ACK";
+    while (!error && readBytes < chunk.totalBytes && !g_fileStreamAborted) {
+      const size_t wanted = min(kFileChunkBytes, chunk.totalBytes - readBytes);
+      const size_t got = file.read(raw, wanted);
+      if (got != wanted) { error = "SD_READ_FAILED"; break; }
+      state = fileCrcUpdate(state, raw, got);
+      readBytes += got;
+      if (readBytes == offset) prefixState = state;
+      if ((readBytes % 4096) < kFileChunkBytes) delay(1);
+      if (millis() - lastProgress >= 1000) {
+        if (!fileSendReliable(chunk)) { error = "NO_BROWSER_ACK"; break; }
+        lastProgress = millis();
+      }
+    }
+    checksum = state ^ 0xffffffffU;
+    if (!error && startSeq && checksum != expectedCrc) error = "FILE_CHANGED: restart download";
+    if (!error && !g_fileStreamAborted) {
+      chunk.kind = 3; chunk.seq = 0xffffffffU;
+      snprintf(chunk.data, sizeof(chunk.data), "%08lx,%s", static_cast<unsigned long>(checksum), base.c_str());
+      if (!fileSendReliable(chunk)) error = "MANIFEST_NOT_ACCEPTED";
+    }
+    if (!error && !g_fileStreamAborted && !file.seek(offset)) error = "SD_SEEK_FAILED";
+    uint32_t remaining = chunk.totalBytes - offset;
+    chunk.kind = 0; chunk.seq = startSeq ? startSeq : 1;
+    // Empty files still have one empty chunk; total+1 resumes completion only.
+    while (!error && chunk.seq <= total && !g_fileStreamAborted) {
+      const size_t wanted = min(kFileChunkBytes, remaining);
+      const size_t got = wanted ? file.read(raw, wanted) : 0;
+      if (got != wanted) { error = "SD_READ_FAILED"; break; }
+      prefixState = fileCrcUpdate(prefixState, raw, got);
+      encodeBase64Chunk(raw, got, chunk.data, sizeof(chunk.data));
+      if (!fileSendReliable(chunk)) { error = "NO_BROWSER_ACK: resume download"; break; }
+      remaining -= got;
+      ++chunk.seq;
+    }
+    if (!error && !g_fileStreamAborted && (prefixState ^ 0xffffffffU) != checksum)
+      error = "FILE_CHANGED: restart download";
+  }
+  if (file) file.close();
+  if (!g_fileStreamAborted) {
+    chunk.kind = error ? 2 : 4;
+    chunk.seq = total + (error ? 2 : 1);
+    if (error) snprintf(chunk.data, sizeof(chunk.data), "%s", error);
+    else snprintf(chunk.data, sizeof(chunk.data), "%08lx,%s", static_cast<unsigned long>(checksum), base.c_str());
+    fileSendReliable(chunk);
+  }
+  fileReliableToken.store(0);
+  fileReliableWaitingSeq.store(0);
+}
+
 void linkDeleteFile(uint8_t index) {
   if (!ensureSdCard() || index >= fileRowCount) {
     const char* err = "$FILEDELETE,failed";
@@ -456,45 +652,55 @@ void linkDeleteFile(uint8_t index) {
 }
 
 void handleFilesTouch(int x, int y) {
-  if (y < kFooterTop) {
-    if (y >= 48) {
-      const int row = (y - 48) / 22;
-      const int idx = filePage * kVisibleRows + row;
-      if (row >= 0 && row < kVisibleRows && idx < fileRowCount) {
-        fileSelected = idx;
-        fileConfirmDelete = false;
-        drawFilesManager();
-      }
-    }
-    return;
+  // A remote list/refresh may replace indices while the old screen is visible.
+  // Redraw before accepting another action, especially a deletion confirmation.
+  if (fileDrawRevision != fileListRevision) {
+    fileViewMode = 0; fileConfirmDelete = false;
+    fileNotice = "List updated; select the file again.";
+    drawFilesManager(); return;
   }
-  const int pages = filePageCount();
-  if (x < 60) {
-    drawStatus();
-  } else if (x < 120) {
-    filePage = (filePage - 1 + pages) % pages;
-    fileSelected = -1;
-    fileConfirmDelete = false;
-    drawFilesManager();
-  } else if (x < 180) {
-    filePage = (filePage + 1) % pages;
-    fileSelected = -1;
-    fileConfirmDelete = false;
-    drawFilesManager();
-  } else if (fileSelected >= 0) {
-    if (!fileConfirmDelete) {
-      fileConfirmDelete = true;
-      drawFilesManager();
-    } else {
+  if (fileViewMode == 1) {
+    if (fileButtonHit(x, y, 8, 46, 224, 172)) {
+      const int row = (y - 46) / 44;
+      if ((y - 46) % 44 >= 40) return;
+      fileFilter = row; filePage = 0; fileViewMode = 0; fileNotice = "";
+    } else if (fileButtonHit(x, y, 8, 222, 224, 40)) {
+      fileNotice = scanSdFiles() ? "SD list refreshed." : "SD list failed; try Refresh.";
+      fileViewMode = 0;
+    } else if (fileButtonHit(x, y, 4, 280, 112, 36)) fileViewMode = 0;
+    else if (fileButtonHit(x, y, 124, 280, 112, 36)) { drawHome(); return; }
+    else return;
+    drawFilesManager(); return;
+  }
+  if (fileViewMode == 2) {
+    if (fileSelected < 0 || fileSelected >= fileRowCount) { fileViewMode = 0; drawFilesManager(); return; }
+    if (fileConfirmDelete) {
+      if (fileButtonHit(x, y, 4, 280, 232, 36)) { fileConfirmDelete = false; drawFilesManager(); return; }
+      if (!fileButtonHit(x, y, 8, 220, 224, 42)) return;
+      if (fileSelectionProtected()) { fileConfirmDelete = false; drawFilesManager(); return; }
       const String path = fileFullPath(fileRows[fileSelected].name);
       const bool removed = SD.remove(path.c_str());
-      Serial.printf("[files] %s %s\n", removed ? "deleted" : "delete failed",
-                    fileRows[fileSelected].name.c_str());
-      recordFirmwareAudit("storage", "file_delete",
-                          removed ? "success" : "failed", "path=" + path);
-      openFilesManager();
-    }
-  } else {
-    openFilesManager();  // rescan when nothing is selected
+      recordFirmwareAudit("storage", "file_delete", removed ? "success" : "failed", "path=" + path);
+      fileConfirmDelete = false;
+      if (removed) {
+        fileViewMode = 0;
+        fileNotice = scanSdFiles() ? "File deleted." : "Deleted; SD refresh failed.";
+      } else fileNotice = "Delete failed; file was not removed.";
+    } else if (fileButtonHit(x, y, 4, 280, 112, 36)) { fileViewMode = 0; fileNotice = ""; }
+    else if (fileButtonHit(x, y, 124, 280, 112, 36) && !fileSelectionProtected()) { fileConfirmDelete = true; fileNotice = ""; }
+    else return;
+    drawFilesManager(); return;
   }
+  if (fileButtonHit(x, y, 8, 44, 224, 38)) { fileViewMode = 1; drawFilesManager(); return; }
+  if (fileButtonHit(x, y, 8, kFileCardTop, 224, kFilesPerPage * kFileCardPitch)) {
+    const int row = (y - kFileCardTop) / kFileCardPitch;
+    if ((y - kFileCardTop) % kFileCardPitch >= kFileCardHeight) return;
+    const int position = filePage * kFilesPerPage + row;
+    if (position >= fileViewCount) return;
+    fileSelected = fileViewRows[position]; fileViewMode = 2; fileConfirmDelete = false; fileNotice = "";
+  } else if (fileButtonHit(x, y, 4, 280, 72, 36)) { drawHome(); return; }
+  else if (fileButtonHit(x, y, 84, 280, 72, 36) && filePage > 0) --filePage;
+  else if (fileButtonHit(x, y, 164, 280, 72, 36) && filePage + 1 < filePageCount()) ++filePage;
+  else return;
+  drawFilesManager();
 }

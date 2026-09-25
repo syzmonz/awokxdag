@@ -83,7 +83,7 @@ void drawDeauthMonitor() {
   currentView = View::kDeauthMonitor;
   display.fillScreen(kBackground);
   const uint32_t total = deauthFrameCount + disassocFrameCount;
-  drawHeader("DEAUTH WATCH", total ? "ALERT: deauth frames detected"
+  drawMonitorHeader("DEAUTH WATCH", deauthMonitorActive, total ? "ALERT: deauth frames detected"
                                    : "listening for deauth frames");
   display.setTextSize(2);
   display.setTextColor(total ? kBad : kGood, kBackground);
@@ -135,7 +135,7 @@ void drawDeauthMonitor() {
   display.setTextColor(kMuted, kBackground);
   display.setCursor(6, 242);
   display.print("Passive monitor; nothing transmitted.");
-  drawFooter("Home", "Reset");
+  drawFooter(deauthMonitorActive ? "Stop" : "Back", "Reset");
 }
 
 void startDeauthMonitor() {

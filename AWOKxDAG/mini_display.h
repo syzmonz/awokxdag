@@ -54,6 +54,8 @@ class AwokMiniDisplay : public Adafruit_GFX {
   void drawFastVLine(int16_t, int16_t, int16_t, uint16_t) override {}
   void fillScreen(uint16_t) override {
     keyboardActive_ = false;
+    dashboardActive_ = false;
+    memset(dashboardLines_, 0, sizeof(dashboardLines_));
     memset(keyboardPreview_, 0, sizeof(keyboardPreview_));
     layout.clear(); dirty_ = true;
   }
@@ -125,7 +127,26 @@ class AwokMiniDisplay : public Adafruit_GFX {
     if (!AwokKeyboard::key(keyboardFocus_, mode).valid()) keyboardFocus_ = 0;
     dirty_ = true;
   }
+  void dashboardLine(int row, const char* text, uint16_t color) {
+    if (row < 0 || row >= 9) return;
+    dashboardActive_ = true;
+    strncpy(dashboardLines_[row], text, 21);
+    dashboardLines_[row][21] = 0;
+    dashboardColors_[row] = color;
+    dirty_ = true;
+  }
+  int dashboardButton(int focus) const {
+    int count = 0;
+    for (int i = 0; i < layout.count; ++i)
+      if (layout.items[i].action() && layout.items[i].targetY >= 278 && count++ == focus) return i;
+    return -1;
+  }
   bool selection(int& x, int& y) const {
+    if (dashboardActive_) {
+      const int i = dashboardButton(dashboardFocus_);
+      if (i < 0) return false;
+      x = layout.items[i].targetX; y = layout.items[i].targetY; return true;
+    }
     if (!keyboardActive_) return layout.selection(x, y);
     const auto key = AwokKeyboard::key(keyboardFocus_, keyboardMode_);
     x = key.x + key.w / 2;
@@ -133,6 +154,11 @@ class AwokMiniDisplay : public Adafruit_GFX {
     return key.valid();
   }
   void navigate(int direction, bool jump = false) {
+    if (dashboardActive_) {
+      if (direction < 0 && dashboardFocus_ > 0) --dashboardFocus_;
+      else if (direction > 0 && dashboardButton(dashboardFocus_ + 1) >= 0) ++dashboardFocus_;
+      redraw_ = true; return;
+    }
     if (keyboardActive_) {
       keyboardFocus_ = AwokKeyboard::move(keyboardFocus_, direction, jump,
                                           keyboardMode_);
@@ -193,6 +219,27 @@ class AwokMiniDisplay : public Adafruit_GFX {
   }
   void present(bool = true) {
     if (diagnostic_ || !canvas_ || (!dirty_ && !redraw_)) return;
+    if (dashboardActive_) {
+      if (dashboardButton(dashboardFocus_) < 0) dashboardFocus_ = 0;
+      canvas_->fillScreen(ST7735_BLACK); canvas_->setTextSize(1);
+      canvas_->setTextColor(ST7735_CYAN); canvas_->setCursor(1, 2);
+      canvas_->print(layout.title);
+      for (int row = 0; row < 9; ++row) {
+        canvas_->setCursor(1, 15 + row * 10); canvas_->setTextColor(dashboardColors_[row]);
+        canvas_->print(dashboardLines_[row]);
+      }
+      int count = 0;
+      while (dashboardButton(count) >= 0) ++count;
+      for (int i = 0; i < count; ++i) {
+        const int x = i * 128 / count, w = 128 / count;
+        const bool focused = i == dashboardFocus_;
+        canvas_->fillRect(x, 110, w - 1, 17, focused ? ST7735_CYAN : ST7735_BLUE);
+        canvas_->setTextColor(focused ? ST7735_BLACK : ST7735_WHITE);
+        const char* label = layout.items[dashboardButton(i)].label;
+        canvas_->setCursor(x + (w - int(strlen(label)) * 6) / 2, 115); canvas_->print(label);
+      }
+      blitCanvas(); dirty_ = redraw_ = false; return;
+    }
     if (keyboardActive_) {
       drawKeyboard();
       blitCanvas();
@@ -283,6 +330,10 @@ class AwokMiniDisplay : public Adafruit_GFX {
       }
     }
   }
+  bool dashboardActive_ = false;
+  int dashboardFocus_ = 0;
+  char dashboardLines_[9][22] = {};
+  uint16_t dashboardColors_[9] = {};
   bool keyboardActive_ = false, keyboardPending_ = false;
   AwokKeyboard::Mode keyboardMode_ = AwokKeyboard::Lower;
   int keyboardFocus_ = 1, keyboardLength_ = 0, keyboardLimit_ = 32;

@@ -43,6 +43,7 @@ enum LinkMsgType : uint8_t {
   kLinkMsgFileDone = 16,              // screen -> bridge: file operation complete / status
   kLinkMsgFileChunk = 18,             // reliable file data/completion (browser ACK)
   kLinkMsgFileChunkAck = 19,          // browser -> bridge -> screen
+  kLinkMsgWardriveStatus = 20,        // screen -> bridge: versioned session dashboard
   kLinkMsgFileReady = 17,             // request/ACK: bridge is parked for file replies
 };
 
@@ -213,8 +214,19 @@ enum AxdSource : uint8_t {
   kSourceSpectrogram = 6, // results char carries a Spectrogram telemetry row
   kSourceWifi6Intel = 7,  // results char carries a Wi-Fi 6 Intel telemetry row
   kSourceDeauthForensics = 8, // results char carries a Deauth Forensics telemetry row
+  kSourceWardriveStatus = 10, // $WDSTAT dashboard; separate from CSV row stream
   kSourceFiles = 9,           // results char carries SD file manager telemetry/data
 };
+
+// Compact text telemetry shares the 250-byte ESP-NOW budget. The source column
+// distinguishes the bridge session from the screen session in a multi-node UI.
+struct AxdWardriveStatusMsg {
+  uint32_t magic = kLinkMagic;
+  uint8_t version = kLinkProtoVersion;
+  uint8_t type = kLinkMsgWardriveStatus;
+  char data[232] = {};
+};
+static_assert(sizeof(AxdWardriveStatusMsg) <= 250, "Wardrive status must fit ESP-NOW");
 
 // SD File Manager entry frame (ESP-NOW screen -> bridge)
 struct AxdFileEntryMsg {
@@ -258,7 +270,7 @@ struct AxdFileChunkMsg {
   uint32_t magic = kLinkMagic;
   uint8_t version = kLinkProtoVersion;
   uint8_t type = kLinkMsgFileChunk;
-  uint8_t kind = 0;  // 0 = base64 data, 1 = completion/name, 2 = error
+  uint8_t kind = 0;  // 0 data, 1 legacy done, 2 error, 3 manifest, 4 verified done, 5 hashing
   uint8_t pad = 0;
   uint32_t token = 0;
   uint32_t seq = 0;
@@ -380,5 +392,9 @@ enum AxdCommand : uint8_t {
   kAxdCmdFileAbort = 67,       // cancel active file streaming
   kAxdCmdFileGetReliable = 68, // BLE: opcode, index, target, LE uint32 request token
   kAxdCmdFileChunkAck = 69,    // BLE write: opcode + LE uint32 token + LE uint32 seq
+  // 19-byte BLE request: op/index/target + LE token/startSeq/snapshotBytes/CRC32.
+  // startSeq=0 starts a new snapshot; >0 resumes the matching snapshot.
+  // COMMAND reuses masterMillis/networks/bleCount for these three fields.
+  kAxdCmdFileGetVerified = 70,
   kAxdCmdStopHome = 255,
 };

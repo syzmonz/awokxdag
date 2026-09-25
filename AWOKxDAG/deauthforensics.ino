@@ -298,7 +298,7 @@ void drawDeauthForensics() {
              static_cast<unsigned long>(deauthBroadcastCount),
              static_cast<unsigned long>(deauthAnomalyCount));
   }
-  drawHeader("DEAUTH FORENSICS", sub);
+  drawMonitorHeader("DEAUTH FORENSICS", deauthForensicsActive, sub);
 
 #ifdef AWOK_MINI_DISPLAY
   display.setTextSize(1);
@@ -341,9 +341,9 @@ void drawDeauthForensics() {
     display.printf("%02X:%02X c%-3u R%-2u %3d", ev.targetMac[4], ev.targetMac[5], ev.channel, ev.reasonCode, ev.rssi);
   }
   if (pages > 1) {
-    drawFourButtonFooter("Back", "< Prev", "Next >", lastDeauthForensicsCsvOk ? "Saved" : "Save");
+    drawFourButtonFooter(deauthForensicsActive ? "Stop" : "Back", "Prev", "Next", lastDeauthForensicsCsvOk ? "Saved" : "Save");
   } else {
-    drawThreeButtonFooter("Back", "Clear", lastDeauthForensicsCsvOk ? "Saved" : "Save");
+    drawThreeButtonFooter(deauthForensicsActive ? "Stop" : "Back", "Clear", lastDeauthForensicsCsvOk ? "Saved" : "Save");
   }
   return;
 #endif
@@ -434,9 +434,9 @@ void drawDeauthForensics() {
   }
 
   if (pages > 1) {
-    drawFourButtonFooter("Back", "< Prev", "Next >", lastDeauthForensicsCsvOk ? "Saved" : "Export");
+    drawFourButtonFooter(deauthForensicsActive ? "Stop" : "Back", "Prev", "Next", lastDeauthForensicsCsvOk ? "Saved" : "Export");
   } else {
-    drawThreeButtonFooter("Back", "Clear", lastDeauthForensicsCsvOk ? "Saved" : "Export");
+    drawThreeButtonFooter(deauthForensicsActive ? "Stop" : "Back", "Clear", lastDeauthForensicsCsvOk ? "Saved" : "Export");
   }
 }
 

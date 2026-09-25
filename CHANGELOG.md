@@ -7,6 +7,296 @@ All notable changes to AxD are documented here. This project follows
 
 ## Please read this repo's documentation at [BattInfo.MD](BattInfo.md)
 
+## [1.7.5-syz.1] - 2026-09-25
+
+Unofficial fork by syzmonz. Not affiliated with or endorsed by dagnazty.
+Rebased on upstream 1.7.5. Fork-only additions on top of upstream:
+
+### Added
+
+- Software battery estimator (dead-reckoning coulomb count) with on-device
+  Power settings group: capacity and calibration-tune steppers, low-battery
+  banner and active-TX halt at 10%, Power-row tap to reset.
+- Battery telemetry across the fleet and in the web control page.
+
+See BattInfo.md for details. Pre-release: not yet hardware-tested.
+
+## [1.7.5] - 2026-09-25
+
+### Changed
+
+- Unified the scan-result screens with the shared card layout (title + one-line
+  detail, 4 per page): Wi-Fi results, BLE Scan, WPS Scan, Hidden SSID, Security
+  Audit, Wi-Fi 6 Intel, BLE Trackers, BLE Intel, Clients, Cameras, and Probe
+  Intel. Card outline conveys state per screen (saved/revealed green, open-WPS /
+  Flipper / camera / following red, risk tiers for the audit, ecosystem color for
+  BLE Intel, generation for Wi-Fi 6). Every result screen now pages with
+  Back/Prev/Next and a page indicator in the header; existing per-screen actions
+  (Save/Export/Reset) and BLE Scan's tap-to-detail are preserved.
+
+## [1.7.4] - 2026-09-24
+
+### Changed
+
+- Home is now a paginated single-column tile list: page 1 Recon / Attacks /
+  Monitor / GPS / Files, page 2 Settings / Status / About, with Prev/Next paging
+  and the firmware version shown in the unused footer slot. **Files** and
+  **Settings** open directly from Home instead of only through the device-health
+  Status screen. Back from the Files list and from the Settings root now returns
+  to Home. About and the memory/radio error screens share one "any tap returns to
+  the tiles" gesture.
+- Navigation labels standardized to plain **Back** / **Prev** / **Next** (the
+  decorated `< Back`, `< Prev`, `Next >`, `About >` variants were removed) across
+  Home, Recon, Deauth Forensics, and Wi-Fi 6 Intel; Home and Stop are unchanged.
+- Unified menu styling: Home, the Recon groups/tools (Wi-Fi, Bluetooth, RF &
+  Packets, Field Tools), the Attacks menu, and the Monitor menu now render as the
+  same Network-Tools-style cards (bold title + one-line description, 4 per page,
+  `Back / Prev / Next` pager) via a shared `drawMenuCard`. Monitor cards keep
+  their running state as a green outline; Attacks cards are danger-red. Tool
+  routing, view IDs, and pagination are unchanged.
+
+## [1.7.3] - 2026-09-24
+
+### Changed
+
+- Network Tools now separates Connection, Hosts, Services, and Results & Upload.
+  Larger cards, visible connection/IP state, and selected-host/page return replace
+  the flat tool list. Results use three cards per page, a large Stop action while
+  scanning, and a separate Actions / Save CSV menu. Connection setup has explicit
+  Cancel while joining; missing prerequisites, empty results, partial scans, and
+  save failures remain visible. Mini retains scrolling position when connection
+  state is unchanged. Existing probes, credentials, upload requests, and view IDs
+  are preserved; stale host/result selections are guarded after memory release
+  or connection loss.
+- Monitor groups all eight detectors into Wi-Fi, Bluetooth, and Advanced, with
+  descriptions and running/stopped state. Touch uses three large cards per page;
+  Mini uses selectable scrolling entries. Stop/Back returns to the detector's
+  group and page, including tools launched remotely. Opening a running detector
+  preserves its results. Existing Reset, Clear, and Export actions remain available;
+  detector algorithms, BLE participation, and radio start/stop routines are unchanged.
+- Settings is grouped into Display, GPS & Time, Behavior, and Diagnostics.
+  Value pickers show the current setting and require Save; Cancel leaves it
+  unchanged. GPS & Time shows the automatic local zone/DST and receiver state.
+  Defaults require a separate confirmation, failed writes report RAM-only
+  changes with Retry save, and diagnostics return to their originating group.
+  The existing NVS record, defaults, and view IDs are unchanged.
+- GPS now separates the location/local-time overview from receiver Diagnostics
+  (baud, raw NMEA, wiring and counters). Mini gets a native compact summary.
+  Drive modes explicitly separate Solo Wi-Fi/BLE, two-board Split, and Fleet.
+  Split has a reachable Pair action; Fleet has explicit coordinator/worker
+  choices. Mode navigation protects active sessions and preserves the existing
+  radio, pairing, and start/stop routines.
+- Reworked the board Captures menu with four larger rows, newest-first ordering,
+  All/Wardrive/PCAP/Logs filters, a named Refresh action, and file details.
+  The bounded list retains the newest 64 files and discloses larger directories.
+  Delete now has a separate confirmation target, reports failures, and blocks
+  the open wardrive CSV. A remote refresh invalidates stale menu selections.
+  Touch and Mini share the same actions; remote transfer indices are not filtered.
+
+### Added
+
+- Wardrive dashboards on Touch, Mini, and the control website: session counts,
+  elapsed time, estimated distance, recent discovery rate, local time, GPS
+  fix coverage/quality, and SD write/flush status. Website telemetry is scoped
+  to the selected bridge/screen and marks stale updates; live received rows
+  remain separate from device session totals. Radio scheduling is unchanged.
+- Bluetooth preview/download Pause, Resume, and Restart. Resume keeps received
+  chunks in the open tab, reconnects to the same bridge, and starts at the first
+  missing chunk after the device verifies the original SD snapshot. Whole-file
+  CRC32 verification blocks corrupt or incomplete previews/saves. Appended CSVs
+  can resume their original prefix; changed or truncated files require Restart.
+  Requires matching updates on both chips and the website; USB streaming is unchanged.
+
+## [1.7.2] - 2026-09-23
+
+### Changed
+
+- Replaced the credential editor with a three-column phone keypad: large Touch
+  targets, abc/ABC/123/symbol modes, repeat-tap letter cycling, a one-second
+  timeout, and explicit Next/Delete/Cancel/Done. Mini uses a native keypad grid
+  with four-direction joystick navigation. All printable ASCII is available;
+  passwords stay masked and keyboard touch coordinates are not logged. The
+  character currently being cycled shows in the clear until it is committed so
+  repeat-tap letter selection is usable while entering a masked password.
+- GPS coordinates now select a local timezone offline. Local time and DST status
+  appear on GPS/Wardrive screens; log timestamps, WiGLE FirstSeen, and filesystem
+  timestamps use local time. The last zone persists through fix loss/reboots;
+  valid fixes refresh the choice every 30 seconds. Flash-only map/rule tables
+  cover 2020–2099 using IANA 2026d, including non-DST and irregular DST regions.
+  Compact geographic boundaries are approximate; future legal changes require
+  refreshing the bundled data. Absolute system time remains correct for TLS/NTP.
+
+## [1.7.1] - 2026-09-22
+
+### Fixed
+
+- Require NimBLE-Arduino 2.5.1 or newer for its scan-response-timer shutdown
+  fix; reject older libraries at compile time and pin release builds to 2.5.1.
+  NimBLE 2.5.0 deleted the scan timer after host teardown, exposing a crash on
+  wardriving/BLE-tool exit. Wardriving now closes its CSV before radio shutdown,
+  logs shutdown stages, ignores duplicate stops, and closes its CSV if radio
+  startup fails. Dual-radio scheduling and BLE participation are unchanged.
+
+### Changed
+
+- Fleet row rings, Wi-Fi 6 Intel, topology, BLE Intel, and deauth-forensics
+  buffers now allocate on tool start and release on stop. Loop-owned result
+  tables prefer PSRAM; callback queues remain in internal RAM. Fleet allocates
+  only the active role's ring. Failed allocations unwind and report a memory
+  error. Callback queues reject late writes across stop/restart; topology peer
+  merges and forensic sequence history now run in the main loop. Tools drain
+  accepted observations and attempt CSV export before freeing their results.
+
+## [1.7.0] - 2026-09-22
+
+### Fixed
+
+- Bridge BLE results now send an explicit payload per notification instead of
+  scheduling an update to a shared characteristic value, preventing concurrent
+  telemetry/file writes from replacing pending data. Transfer logs now identify
+  ESP-NOW enqueue failures, BLE enqueue failures and MTU, and the exact chunk
+  whose browser ACK exhausted its retries.
+- BLE file preview/download now uses browser acknowledgments for every chunk
+  and completion message, with up to 10 attempts per chunk. Lost ESP-NOW packets,
+  BLE notifications, and ACKs are retried without duplicating file bytes. Transfer
+  tokens reject stale packets; 32-bit sequences support captures above 6 MB.
+  Reliable file notifications are queued outside the Wi-Fi callback, and bridge
+  scanning pauses during the transfer. Requires both chips and the updated control
+  page; legacy USB file streaming remains available.
+- Remote file preview/download now waits for a receiver-ready handshake after
+  the bridge finishes its command channel sweep. Previously the screen started
+  sending immediately while the bridge hopped away, consistently losing the
+  first chunks containing the wardrive CSV header. Update both chips for this
+  handshake; USB transfers are unchanged.
+- Wardrive SD sessions now verify the complete WiGLE metadata and column-header
+  write before accepting rows, including Split/Fleet Link sessions. Failed header
+  writes disable SD logging and remove the incomplete new file.
+- Remote SD downloads reject missing, malformed, or short chunks instead of
+  silently saving partial files (which could omit the wardrive header). Reading
+  an active wardrive file flushes its buffered SD data first.
+
+### Changed
+
+- Replaced Recon's four mixed pages with Wi-Fi, Bluetooth, RF & Packets, and
+  Field Tools groups, plus direct access to Network Tools. Each group fits on
+  one menu page; returning from a tool preserves its group on Touch and Mini.
+
+## [1.6.5] - 2026-09-22
+
+### Added
+
+- **Wi-Fi 6 / 802.11ax OFDMA & BSS Color Intelligence (`AWOKxDAG/wifi6intel.ino`):**
+  - **Passive HE Beacon & Probe Inspector:** Promiscuous management frame parser extracting 802.11ax High Efficiency capabilities and operation elements (Extended Tag 255 with Ext IDs 35 and 36) without transmitting.
+  - **BSS Color Collision Analysis:** Extracts 6-bit BSS Color codes (1–63) and BSS Color Disabled flags to map spatial reuse channel congestion and co-channel interference.
+  - **Channel Width & Generation Classification:** Identifies channel operating widths (20, 40, 80, 160 MHz) and classifies networks into Wi-Fi 4 (802.11n), Wi-Fi 5 (802.11ac), and Wi-Fi 6 (802.11ax).
+  - **On-Device UI (`View::kWifi6Intel`):** Touch (240×320) and Mini (128×128) scrollable list showing generational badges, color pills, channel widths, BSSID, and RSSI with on-device SD CSV export.
+  - **SD Card CSV Logging:** Exports observed Wi-Fi 6 parameters and collision states to `/awokxdag/wifi6_intel.csv` with GPS coordinates.
+  - **Telemetry Streaming:** Emits `$AXINTEL,bssid,ssid,channel,generation,bssColor,channelWidth,rssi` over Serial and Web Bluetooth (`kSourceWifi6Intel = 7`, opcode 59 `kAxdCmdWifi6Intel`).
+  - **Remote Dashboard Tab (`control.html`):** Added dedicated "⚡ Wi-Fi 6" tab with live interactive 64-cell BSS Color collision matrix, generational breakdown stats, band filters, and CSV export.
+
+- **Targeted Deauth & Disassociation Forensic Analyzer (`AWOKxDAG/deauthforensics.ino`):**
+  - **Promiscuous Forensic Attribution Engine:** Passive sniffer for 802.11 deauthentication (subtype 12) and disassociation (subtype 10) frames.
+  - **Attack Classification:** Differentiates shotgun broadcast floods (`ff:ff:ff:ff:ff:ff`) from targeted unicast victim station attacks.
+  - **Transmitter Sequence Number Anomaly Detection:** Tracks per-transmitter 802.11 sequence counters and flags sudden sequence number jumps ($|\Delta| > 10$) indicating forged/spoofed transmitter MAC addresses.
+  - **Reason Code Decoding:** Decodes standard 802.11 reason codes (1 Unspecified, 2 Prev Auth Invalid, 3 Station Leaving, 6 Class 2 Nonauth, 7 Class 3 Nonassoc, 8 Station Disassoc, 15 4-Way Handshake Timeout, etc.).
+  - **On-Device UI (`View::kDeauthForensics`):** Touch and Mini screens with live incident counters, attack classification badges, and victim MAC tracking.
+  - **SD Card CSV Logging:** Logs complete forensic event audits to `/awokxdag/deauth_forensics.csv` with timestamps and GPS geotags.
+  - **Telemetry & Real-Time Alerts:** Emits `$DEAUTH,type,targetMac,sourceMac,bssid,reason,seqJump,rssi,channel` over Serial and Web Bluetooth (`kSourceDeauthForensics = 8`, opcode 63 `kAxdCmdDeauthForensics`).
+  - **Remote Dashboard Tab (`control.html`):** Added dedicated "🛡️ Deauth Forensics" tab with real-time attack alert banners, live forensic event table, filter segments, and CSV export.
+
+- **Remote SD Card File Manager & Web Serial Transfer (`files.ino`, `link.ino`, `control.html`):**
+  - **In-Browser File Manager Tab (`tab-files`):** Dedicated "📁 SD Files" dashboard tab in the WebUI to browse, preview, and download capture files, wardrive CSVs, and logs directly from `/awokxdag` to your phone or PC.
+  - **Binary-Safe Base64 Chunked Streaming:** Emits on-the-fly Base64 encoded chunks (`$FILEDATA,<seq>,<total>,<data>`) over Web Bluetooth and Web Serial, ensuring binary safe packet capture (`.pcap`) and text log transfers without delimiter collisions or control character corruption.
+  - **Dual-Board ESP-NOW Relay:** File listing (`kAxdCmdFileList = 64`), download (`kAxdCmdFileGet = 65`), delete (`kAxdCmdFileDelete = 66`), and abort (`kAxdCmdFileAbort = 67`) requests are seamlessly bridged between the Screen Chip (holding the physical SD card) and the Orange Bridge Chip over ESP-NOW.
+  - **Web Serial Integration:** Added native Web Serial (`navigator.serial`) connection engine at 115200 baud to the WebUI header, enabling direct cable plug-and-play on desktop PCs and Android USB-OTG in addition to Web Bluetooth.
+  - **In-Browser Preview Drawer:** Instant in-browser preview with copy-to-clipboard for wardrive CSVs, handshake hashcat files, and text logs.
+  - **Live Progress & Throughput Tracker:** Shows animated progress bar, percentage completion, transfer speed in KB/s, and byte-level verification with automatic browser file saving.
+
+## [1.6.4] - 2026-09-21
+
+### Added
+
+- **Dual-Band RF Spectrogram & Waterfall Analyzer (`AWOKxDAG/spectrogram.ino`):**
+  - **Promiscuous RF Monitor:** Continuous passive channel dwell measuring frame arrival rate, byte volume, peak RSSI, and noise floor across 2.4 GHz (channels 1–13) and 5 GHz (channels 36–165).
+  - **Duty Cycle & Airtime Saturation Metric:** Computes estimated physical on-air channel occupancy percentage (0–100%) and categorizes Management, Control, and Data frame distributions.
+  - **On-Device Thermal Waterfall Spectrogram (`View::kSpectrogram`):** Touch (240×320) interface displaying live channel stats, instantaneous spectrum bar chart with decay peak-hold indicators, and a scrolling 28-row thermal 2D waterfall heat map. Mini (128×128) compact duty cycle and bar chart.
+  - **Channel Sweeping & Single-Channel Lock Modes:** Supports cycling through All Channels, 2.4 GHz only, or locking onto a specific congested channel (with direct tap-to-lock on the bar chart).
+  - **SD Card CSV Logging:** Exports full channel spectrum and duty cycle snapshots to `/awokxdag/spectrogram.csv` with GPS coordinates.
+  - **Serial & BLE Telemetry Streaming:** Emits `$SPEC,ch,dutyPct,pkts,peakRssi,noise,mgmt,ctrl,data` over serial and Web Bluetooth (`kSourceSpectrogram = 6`).
+  - **Remote Dashboard Tab (`control.html`):** Dedicated "🌈 Spectrogram" tab featuring real-time HTML5 Canvas spectrum bar chart with peak hold, high-fps scrolling thermal waterfall canvas, band filters, and CSV export. Opcode 58 (`kAxdCmdSpectrogram`) remote activation.
+
+## [1.6.3] - 2026-09-20
+
+### Added
+
+- **BLE Ecosystem Intel & Continuity Decoder (`AWOKxDAG/bleintel.ino`):**
+  - **Proprietary Vendor Payload Decoding:** Continuous passive BLE scan that parses manufacturer and service data payloads without active pairing:
+    - **Apple Continuity (0x004C):** Decodes Proximity Pairing (`0x07`) identifying models (AirPods 1/2/3, AirPods Pro 1/2, AirPods Max, Powerbeats Pro, Beats Solo Pro, Studio Buds, Fit Pro) with exact Left, Right, and Case battery percentages and active charging states; parses AirDrop (`0x05`), Nearby Info (`0x10`), Find My (`0x12`), AirPlay Target (`0x09`), Apple Watch tethering (`0x0B`), and Handoff (`0x0C`).
+    - **Google / Android Fast Pair (0xFE2C):** Matches Fast Pair Service Data (0xFE2C), decoding Model ID hex strings and pairing readiness.
+    - **Microsoft Swift Pair (0x0006):** Identifies PC peripheral discovery advertisements.
+    - **Samsung Continuity (0x0075 / 0xFD5A):** Detects Samsung Galaxy continuity beacons and SmartThings Find beacons.
+  - **On-Device Interface (`View::kBleIntel`):** Touch (240×320) and Mini (128×128) scrollable list showing vendor ecosystem color-coded badges, device type, address, RSSI, and decoded battery/status details.
+  - **SD Card CSV Logging:** Exports full telemetry to `/awokxdag/ble_intel.csv` with GPS coordinates, timestamps, battery levels, and sightings.
+  - **Serial & BLE Telemetry Streaming:** Emits `$BLEINTEL,mac,ecosystem,deviceType,rssi,batteryL,batteryR,batteryCase,details` strings via serial monitor and over Web Bluetooth notifications (`kSourceBleIntel = 5`).
+  - **Remote Control Dashboard (`control.html`):** Added dedicated "🎧 BLE Intel" tab with live ecosystem filtering (Apple, Google, Microsoft, Samsung), real-time battery pill indicators with charge indicators, CSV export, and opcode 57 (`kAxdCmdBleIntel`) activation.
+
+## [1.6.1] - 2026-09-20
+
+### Added
+
+- **Swarm Mesh Topology Graph (Client & AP Relationship Map):**
+  - **Promiscuous link sniffer (`AWOKxDAG/topologymap.ino`):** Channel-hopping 802.11 monitor
+    capturing active associations from data frames (`toDs && !fromDs`) and directed probe
+    request leaks (`0x40` subtype) across 2.4 GHz and 5 GHz bands. Detects unencrypted open
+    networks directly from beacon/probe capability flags.
+  - **Multi-node Swarm Protocol (`AWOKxDAG/link_protocol.h` & `link.ino`):**
+    Introduced `kLinkMsgFleetTopology` (type 13, 48 bytes) to stream client-to-AP and client-to-probe
+    links across fleet worker nodes to the coordinator. Opcode 56 (`kAxdCmdTopology`) provides
+    remote activation over ESP-NOW and Web Bluetooth.
+  - **On-device Cluster UI (`View::kTopologyMap`):** Hierarchical cluster matrix on Touch
+    (240×320) and Mini (128×128) screens, displaying APs with channel, encryption badge, and
+    indented connected client stations showing packet count and signal RSSI.
+  - **Interactive Web Bluetooth Force-Directed Physics Graph (`control.html`):**
+    Dedicated "🕸️ Topology" tab featuring real-time HTML5 Canvas particle physics
+    (Coulomb repulsion, Hooke springs, centering gravity), interactive drag-and-drop,
+    node inspector drawer, live metric counters (APs, Clients, Probes, Open Networks),
+    probe leak toggles, and JSON/CSV export.
+  - **Bridge & SD Telemetry (`AxDBridge/AxDBridge.ino` & `topologymap.ino`):**
+    Streams `$TOPO,AP,...`, `$TOPO,CLI,...`, and `$TOPO,PRB,...` telemetry via `kSourceTopo` (4)
+    over BLE and logs to `/awokxdag/topology_map.csv` with GPS coordinates.
+
+## [1.6.0] - 2026-09-20
+
+### Added
+
+- **Fleet Hunter (multi-node target radio direction-finding & trilateration).**
+  - **Trilateration engine (`AWOKxDAG/locator.ino`):** Computes estimated target GPS
+    coordinates $(lat, lon)$, geodesic distance, and confidence radius using
+    Weighted Centroid Localization (WCL) with log-distance path loss ($n = 2.5$).
+    Calculates dynamic forward azimuth compass bearing ($0^\circ$–$360^\circ$) to guide
+    operators directly to rogue or target transmitters on foot.
+  - **Multi-node ESP-NOW protocol (`AWOKxDAG/link_protocol.h` & `link.ino`):**
+    Introduced `kLinkMsgFleetHuntObservation` (type 11, 28 bytes) and
+    `kLinkMsgFleetHuntResult` (type 12) frames. Fleet worker nodes send target
+    sightings with their own GPS coordinates and RSSI readings to the coordinator,
+    which aggregates observations across the fleet in a 16-point ring buffer.
+  - **On-device Radar Compass display:** Added `View::kFleetHunt` screen for Touch
+    (240×320) and Mini (128×128) devices, featuring a tactical circular radar scope
+    with concentric range rings, cardinal compass headers (N/E/S/W), real-time
+    target vector ray, animated pulsating target blip, confidence radius boundary,
+    and numerical metrics (distance, bearing, coordinates, RSSI, point count).
+  - **Interactive Web Bluetooth Radar Scope (`control.html`):**
+    - Added `🎯 Fleet Hunter` action button (opcode 55) for selected target APs.
+    - Added HTML5 Canvas radar scope visualizer with animated rotating sweep beam,
+      target blip, distance readout, directional compass badge, and confidence indicator.
+    - Direct "📍 Open in Maps" integration generating live Google Maps links from
+      solved coordinates.
+    - Added `$HUNT` telemetry parser (`parseHuntRow()`) and updated WiGLE CSV export
+      release header to `1.6.0`.
+  - **Bridge relay (`AxDBridge/AxDBridge.ino`):** Added headless ESP-NOW forwarding of
+    `FleetHuntResult` frames directly to Web Bluetooth clients as `kSourceHunt` (3)
+    notifications.
+
 ## [1.5.5] - 2026-09-20
 
 ### Fixed
@@ -807,7 +1097,18 @@ All notable changes to AxD are documented here. This project follows
 - Touchscreen UI, SD capture manager, status screens, serial controls, build
   workflow, and recovery documentation.
 
-[Unreleased]: https://github.com/dagnazty/awokxdag/compare/v1.5.5...HEAD
+[Unreleased]: https://github.com/dagnazty/awokxdag/compare/v1.7.5...HEAD
+[1.7.5]: https://github.com/dagnazty/awokxdag/compare/v1.7.4...v1.7.5
+[1.7.4]: https://github.com/dagnazty/awokxdag/compare/v1.7.3...v1.7.4
+[1.7.3]: https://github.com/dagnazty/awokxdag/compare/v1.7.2...v1.7.3
+[1.7.2]: https://github.com/dagnazty/awokxdag/compare/v1.7.1...v1.7.2
+[1.7.1]: https://github.com/dagnazty/awokxdag/compare/v1.7.0...v1.7.1
+[1.7.0]: https://github.com/dagnazty/awokxdag/compare/v1.6.5...v1.7.0
+[1.6.5]: https://github.com/dagnazty/awokxdag/compare/v1.6.4...v1.6.5
+[1.6.4]: https://github.com/dagnazty/awokxdag/compare/v1.6.3...v1.6.4
+[1.6.3]: https://github.com/dagnazty/awokxdag/compare/v1.6.1...v1.6.3
+[1.6.1]: https://github.com/dagnazty/awokxdag/compare/v1.6.0...v1.6.1
+[1.6.0]: https://github.com/dagnazty/awokxdag/compare/v1.5.5...v1.6.0
 [1.5.5]: https://github.com/dagnazty/awokxdag/compare/v1.5.4...v1.5.5
 [1.5.4]: https://github.com/dagnazty/awokxdag/compare/v1.5.3...v1.5.4
 [1.5.3]: https://github.com/dagnazty/awokxdag/compare/v1.5.2...v1.5.3

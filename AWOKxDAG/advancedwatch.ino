@@ -754,10 +754,10 @@ void drawAdvancedWatch() {
                      advancedAssocAlert || advancedCsaAlert || advancedRfAlert ||
                      advancedAlertTotal > 0;
   display.fillScreen(kBackground);
-  drawHeader("ADVANCED WATCH",
+  drawMonitorHeader("ADVANCED WATCH", advancedWatchActive,
              alert ? "ALERT: anomaly detected"
                    : (radiosCoexist ? "Wi-Fi + BLE integrity"
-                                     : "Wi-Fi integrity (BLE off, mini)"));
+                                      : "Wi-Fi only; Mini BLE off"));
   display.setTextSize(2);
   display.setTextColor(alert ? kBad : kGood, kBackground);
   display.setCursor(6, 48);
@@ -820,7 +820,7 @@ void drawAdvancedWatch() {
                                  : "SD log unavailable; live view only");
   display.setCursor(6, 260);
   display.print("Passive heuristics; verify alerts manually.");
-  drawFooter("Back", "Reset");
+  drawFooter(advancedWatchActive ? "Stop" : "Back", "Reset");
 }
 
 void resetAdvancedWatch() {

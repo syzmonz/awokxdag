@@ -78,7 +78,7 @@ BleDetectCallbacks bleDetectCallbacks;
 void drawBleDetect() {
   currentView = View::kBleSpamWatch;
   display.fillScreen(kBackground);
-  drawHeader("BLE SPAM WATCH",
+  drawMonitorHeader("BLE SPAM WATCH", bleDetectActive,
              bleDetectAlert ? "ALERT: spam flood nearby"
                             : "listening for advert floods");
   display.setTextSize(2);
@@ -115,7 +115,7 @@ void drawBleDetect() {
   display.print("random-address vendor adverts in a");
   display.setCursor(6, 206);
   display.print("short window indicate a spammer.");
-  drawFooter("Home", "Reset");
+  drawFooter(bleDetectActive ? "Stop" : "Back", "Reset");
 }
 
 void startBleDetect() {

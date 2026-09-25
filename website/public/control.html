@@ -287,6 +287,22 @@
   .net .mb { color: var(--muted); font-size: 11px; font-variant-numeric: tabular-nums; margin-top: 2px; display: flex; gap: 8px; }
   .net .rs { color: var(--muted); font-size: 11px; white-space: nowrap; font-variant-numeric: tabular-nums; text-align: right; }
 
+  /* Wardrive session and transfer status cards */
+  .stats-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(220px,1fr)); gap:12px; }
+  .stat-card { min-width:0; padding:16px; border:1px solid var(--line); border-radius:var(--radius-sm); background:var(--card); }
+  .stat-card .v { margin:8px 0; font-size:22px; overflow-wrap:anywhere; }
+  .stat-card .sub { line-height:1.6; overflow-wrap:anywhere; }
+  .wd-primary .wd-stat-box { padding:16px 8px; }
+  .wd-primary .wd-stat-box .v { font-size:28px; margin-top:8px; }
+  .wd-actions { flex-wrap:wrap; }
+  .wd-actions button, #file-progress-card button { min-height:42px; }
+  #file-progress-card [hidden] { display:none; }
+  @media (max-width:600px) {
+    #tab-files .stats-grid { grid-template-columns:repeat(2,minmax(0,1fr)); }
+    #tab-wardrive .wd-stats { grid-template-columns:repeat(2,minmax(0,1fr)); }
+    #tab-wardrive .card-title { flex-wrap:wrap; gap:8px; }
+  }
+
   /* Wardrive Live Table */
   .wd-stats {
     display: grid;
@@ -578,21 +594,35 @@
   <div id="tab-wardrive" class="tab-content" hidden>
     <div class="card">
       <div class="card-title">
-        <span>Live Wardrive Stream (WiGLE 1.6)</span>
-        <span class="badge badge-lime">GPS Active</span>
+        <span>Wardrive session</span>
+        <span id="wd-session-state" class="badge">Waiting for telemetry</span>
       </div>
 
-      <div class="row" style="margin-bottom:10px;">
+      <div class="row wd-actions" style="margin-bottom:10px;">
         <button data-op="7" class="primary btn-sm">▶ Start Wardrive</button>
         <button data-op="8" class="stop btn-sm">⏹ Stop Wardrive</button>
-        <button id="wd-save" class="primary btn-sm">💾 Download CSV</button>
+        <button id="wd-save" class="primary btn-sm">💾 Export received rows</button>
         <button id="wd-clear" class="btn-sm">🗑 Clear</button>
       </div>
 
+      <div id="wd-session-source" class="sub" style="margin:8px 0 14px;">Select a connected board to view its session.</div>
+      <div class="wd-stats wd-primary" style="margin-bottom:12px;">
+        <div class="wd-stat-box"><div class="k">Board Wi-Fi</div><div id="wd-session-wifi" class="v">—</div></div>
+        <div class="wd-stat-box"><div class="k">Board BLE</div><div id="wd-session-ble" class="v">—</div></div>
+        <div class="wd-stat-box"><div class="k">Recent discoveries / min</div><div id="wd-session-rate" class="v">—</div></div>
+        <div class="wd-stat-box"><div class="k">Distance with good GPS</div><div id="wd-session-distance" class="v">—</div></div>
+      </div>
+      <div class="stats-grid" style="margin-bottom:16px;">
+        <div class="stat-card"><div class="k">Session time</div><div id="wd-session-elapsed" class="v">—</div><div id="wd-session-clock" class="sub">Waiting for local time</div><div id="wd-session-zone" class="sub"></div></div>
+        <div class="stat-card"><div class="k">GPS quality</div><div id="wd-session-gps" class="v">—</div><div id="wd-session-quality" class="sub">Satellites / HDOP / fix coverage</div></div>
+        <div class="stat-card"><div class="k">SD recording</div><div id="wd-session-storage" class="v">Unknown</div><div id="wd-session-file" class="sub"></div><div id="wd-session-flush" class="sub">Awaiting board status</div></div>
+      </div>
+      <div class="sub" style="margin-bottom:16px;">Session metrics come from the selected board. Distance excludes poor fixes and GPS gaps. The live CSV below contains only rows received by this browser; use Files for the verified SD copy.</div>
+      <div class="card-title"><span>Browser-received sightings</span></div>
       <!-- Live Sightings Counter Breakdown -->
       <div class="wd-stats">
         <div class="wd-stat-box">
-          <div class="k">Total Sighted</div>
+          <div class="k">Received rows</div>
           <div id="wd-count" class="v" style="color:var(--lime);">0</div>
         </div>
         <div class="wd-stat-box">
@@ -630,7 +660,7 @@
       </div>
 
       <div class="k" style="margin-top:6px;">
-        WiGLE CSV rows streamed across all connected fleet nodes merge in real-time. Download CSV exports directly to your phone's file storage.
+        Received rows from connected bridges merge here. This browser export may omit rows lost over the live link and is separate from the board’s verified SD download.
       </div>
     </div>
   </div>
@@ -1139,7 +1169,7 @@
       <!-- Active File Transfer Progress Card -->
       <div id="file-progress-card" class="card" style="display:none; margin-bottom:16px; border:1px solid var(--accent); background:rgba(0,255,200,0.05);">
         <div class="card-title" style="margin-bottom:6px;">
-          <span>Downloading: <b id="file-progress-name" style="color:var(--accent);">file.csv</b></span>
+          <span>Transfer: <b id="file-progress-name" style="color:var(--accent);">file.csv</b></span>
           <span id="file-progress-pct" style="font-weight:700; color:var(--accent);">0%</span>
         </div>
         <div style="height:12px; background:rgba(255,255,255,0.1); border-radius:6px; overflow:hidden; margin:8px 0;">
@@ -1149,6 +1179,13 @@
           <span id="file-progress-detail">0 / 0 bytes (Chunk 0/0)</span>
           <span id="file-progress-speed">0.0 KB/s</span>
         </div>
+        <p id="file-progress-state" role="status" style="font-size:13px;">Preparing verified download…</p>
+        <div class="row" style="gap:8px; flex-wrap:wrap;">
+          <button id="files-pause-btn" class="btn-sm">Pause</button>
+          <button id="files-resume-btn" class="primary btn-sm" hidden>Resume</button>
+          <button id="files-restart-btn" class="btn-sm" hidden>Restart from beginning</button>
+        </div>
+        <div class="sub" style="margin-top:8px;">Bluetooth downloads keep received chunks in this tab. Keep it open to resume after reconnecting. Files are checked before saving or previewing.</div>
       </div>
 
       <!-- File Table -->
@@ -1326,6 +1363,69 @@ function touchConnRow(c){  // in-place refresh (no full re-render, avoids flicke
   if (c.mbEl) c.mbEl.textContent = connSummary(c);
   if (c.dotEl) c.dotEl.classList.toggle("on", c.connected);
 }
+
+// Device dashboard telemetry is deliberately separate from the best-effort live
+// CSV stream. Never infer SD health, GPS fix or board counts from received rows.
+let serialWardriveSession = null;
+function parseWardriveStatus(line, connection = null) {
+  const p = line.split(",");
+  if (p.length !== 24 || p[0] !== "$WDSTAT" || p[1] !== "1") return;
+  const numeric = [2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,20,21,22,23];
+  if (!numeric.every(i => Number.isFinite(Number(p[i])))) return;
+  const source = Number(p[2]);
+  if (![0,1].includes(source) || !["0","1"].includes(p[4]) || !["0","1"].includes(p[21])) return;
+  if (![3,5,7,8,9,10,11,13,14,15,16,20,23].every(i => Number.isInteger(Number(p[i])) && Number(p[i]) >= 0 && Number(p[i]) <= 0xffffffff)) return;
+  if (+p[7] > 100 || +p[13] > 4 || +p[20] > 3 || +p[6] < 0 || +p[12] < -1 || +p[22] < 0) return;
+  const session = {
+    receivedAt: Date.now(), source, id:Number(p[3]), active:p[4]==="1",
+    seconds:Number(p[5]), metres:Number(p[6]), fixPercent:Number(p[7]),
+    wifi:Number(p[8]), ble:Number(p[9]), rate:Number(p[10]), sats:Number(p[11]), hdop:Number(p[12]),
+    storage:Number(p[13]), rows:Number(p[14]), bytes:Number(p[15]), flushAge:Number(p[16]),
+    local:p[17], zone:p[18], file:p[19], mode:Number(p[20]), fix:p[21]==="1",
+    speed:Number(p[22]), nodes:Number(p[23])
+  };
+  if (connection) {
+    if (!connection.wardriveSessions) connection.wardriveSessions = {};
+    connection.wardriveSessions[source] = session;
+  } else serialWardriveSession = session;
+  renderWardriveDashboard();
+}
+
+function renderWardriveDashboard() {
+  const connection = activeConn();
+  const session = serialConnected ? serialWardriveSession : connection?.wardriveSessions?.[target];
+  const put = (id, value) => { if ($(id)) $(id).textContent = value; };
+  if (!session) {
+    put("wd-session-state", "Waiting for telemetry");
+    if ($("wd-session-state")) $("wd-session-state").className = "badge";
+    put("wd-session-source", "Select a board and start wardriving. Both chips need firmware with dashboard telemetry.");
+    for (const suffix of ["wifi","ble","rate","distance","elapsed","gps","storage","file","flush","quality","clock","zone"]) put("wd-session-" + suffix, "—");
+    return;
+  }
+  const age = Math.max(0, Math.floor((Date.now() - session.receivedAt) / 1000));
+  const stale = age > 20 || (!serialConnected && !connection?.connected);
+  const modes = ["Solo", "Split", "Fleet coordinator", "Fleet worker"];
+  const warning = session.storage === 3 ? "SD WRITE FAILED" : session.storage === 0 ? "NO SD RECORDING" : !session.fix ? (session.mode === 2 && session.rows > 0 ? "Recording · local GPS missing" : "Waiting for GPS") : session.rows === 0 && session.storage !== 4 ? "Waiting for sightings" : "Recording";
+  put("wd-session-state", stale ? "Telemetry stale" : !session.active ? "Stopped" : warning);
+  if ($("wd-session-state")) $("wd-session-state").className = "badge " +
+    (stale || !session.fix || session.storage === 0 || session.storage === 3 ? "badge-warn" : session.active ? "badge-lime" : "");
+  put("wd-session-source", `${serialConnected ? "USB Serial" : connection.name + (target === 1 ? " · Screen" : " · Bridge")} · ${modes[session.mode] || "Wardrive"} · ${session.nodes} node(s) · session ${session.id} · updated ${age}s ago`);
+  put("wd-session-wifi", session.wifi.toLocaleString());
+  put("wd-session-ble", session.ble.toLocaleString());
+  put("wd-session-rate", stale || !session.active ? "—" : session.rate.toLocaleString());
+  put("wd-session-distance", (session.metres / 1000).toFixed(2) + " km");
+  const seconds = session.seconds;
+  put("wd-session-elapsed", [Math.floor(seconds/3600),Math.floor(seconds/60)%60,seconds%60].map(n=>String(n).padStart(2,"0")).join(":"));
+  put("wd-session-clock", session.local + " local" + (stale ? " (last update)" : ""));
+  put("wd-session-zone", session.zone);
+  put("wd-session-gps", stale ? "Unknown (stale)" : session.fix ? "Fix acquired" : "No fix");
+  put("wd-session-quality", `${session.sats} satellites · HDOP ${session.hdop < 0 ? "—" : session.hdop.toFixed(1)} · fix ${session.fixPercent}% of session`);
+  const storage = ["Unavailable", "Awaiting flush", "Flushed", "Write failed", "Relay to coordinator"][session.storage] || "Unknown";
+  put("wd-session-storage", storage + (stale ? " (last update)" : ""));
+  put("wd-session-file", session.storage === 4 ? "Merged CSV is on the coordinator" : `${session.file} · ${session.rows.toLocaleString()} rows · ${formatBytes(session.bytes)}`);
+  put("wd-session-flush", session.storage === 4 ? "Worker does not write a local CSV" : session.flushAge === 0xffffffff ? "No successful flush reported" : `Last flush ${session.flushAge + age}s ago`);
+}
+setInterval(renderWardriveDashboard, 1000);
 
 // ---- per-bridge Wi-Fi list & Wardrive parsing ---------------------------
 const AUTH = ["Open","WEP","WPA","WPA2","WPA2-Ent","WPA3","WPA2/3","WAPI","OWE"];
@@ -2879,6 +2979,11 @@ function exportDeauthCsv() {
 }
 
 function parseResult(dv, c){
+  if (dv.byteLength >= 1 && dv.getUint8(0) === 10) {
+    let line = "";
+    for (let k = 1; k < dv.byteLength; k++) line += String.fromCharCode(dv.getUint8(k));
+    parseWardriveStatus(line, c); return;
+  }
   if (dv.byteLength >= 1 && dv.getUint8(0) === 2) {  // wardrive WiGLE CSV row (text)
     let row = "";
     for (let k = 1; k < dv.byteLength; k++) row += String.fromCharCode(dv.getUint8(k));
@@ -3303,6 +3408,7 @@ async function reconnectConn(c){
 
 function onDisc(c){
   c.connected = false;
+  if (activeFileDownload?.connection === c) pauseFileDownload("Bluetooth disconnected. Reconnect this bridge, then Resume.", false);
   log(c.name + " disconnected.");
   touchConnRow(c); updateEnabled(); renderConns();
   if (c.id === activeId) { renderNets(); renderStats(); }
@@ -3397,7 +3503,7 @@ updateEnabled(); renderConns(); renderStats(); initTopoCanvas();
 async function downloadWardriveCsv(){
   if (!wardriveRows.length){ log("no wardrive rows yet"); return; }
   const header =
-    "WigleWifi-1.6,appRelease=AxD,model=ESP32,release=1.7.2,device=AxD,display=none,board=AxD Bridge,brand=AxD\n" +
+    "WigleWifi-1.6,appRelease=AxD,model=ESP32,release=1.7.5,device=AxD,display=none,board=AxD Bridge,brand=AxD\n" +
     "MAC,SSID,AuthMode,FirstSeen,Channel,Frequency,RSSI,CurrentLatitude,CurrentLongitude,AltitudeMeters,AccuracyMeters,RCOIs,MfgrId,Type\n";
   const text = header + wardriveRows.join("\n") + "\n";
   const fname = "wardrive-" + Date.now() + ".csv";
@@ -3643,6 +3749,7 @@ async function readSerialLoop() {
 }
 
 function handleIncomingLine(line) {
+  if (line.startsWith("$WDSTAT,")) { parseWardriveStatus(line); return; }
   if (line.startsWith("$FILE")) {
     parseFileMessage(line);
     return;
@@ -3751,7 +3858,7 @@ function renderFilesTable() {
 }
 
 function requestFileList() {
-  if (activeFileDownload) { log("Finish or abort the transfer before refreshing files"); return; }
+  if (activeFileDownload && activeFileDownload.state !== "paused") { log("Pause or finish the transfer before refreshing files"); return; }
   sdFileList = [];
   if ($("files-tbody")) {
     $("files-tbody").innerHTML = '<tr><td colspan="5" style="text-align:center; color:var(--muted); padding:24px;">Scanning /awokxdag on SD card…</td></tr>';
@@ -3781,6 +3888,9 @@ function startFileDownload(index, isPreview = false) {
     bytesReceived: 0,
     connection: serialConnected ? null : activeConn(),
     reliable: !serialConnected,
+    verified: !serialConnected,
+    state: "requesting",
+    deviceId: serialConnected ? null : (activeConn()?.device?.id || activeConn()?.id),
     token: null,
     isPreview
   };
@@ -3796,24 +3906,73 @@ function startFileDownload(index, isPreview = false) {
   if (serialConnected) {
     sendSerialCommand(65, index);
   } else {
-    armFileTransferTimeout();
+    setFileTransferState("Checking the SD snapshot…");
     requestReliableFile(activeFileDownload);
+    armFileTransferTimeout();
   }
+  if (serialConnected) setFileTransferState("Receiving over USB Serial (size check only)");
   log(`Starting download of ${file.name} (${formatBytes(file.size)})`);
 }
 
-function abortFileDownload() {
-  const connection = activeFileDownload?.connection;
-  if (activeFileDownload?.reliable && connection?.cmdCh) {
+function sendFileAbort(transfer) {
+  const connection = transfer?.connection;
+  if (transfer?.reliable && connection?.connected && connection.cmdCh) {
     connection.fileAckWrites = (connection.fileAckWrites || Promise.resolve())
       .then(() => connection.cmdCh.writeValue(new Uint8Array([67, 0, TGT_SCREEN])))
       .catch(error => log("Abort failed: " + error.message));
-  } else if (serialConnected) {
-    sendSerialCommand(67, 0);
-  } else {
-    sendOp(67, 0);
+  } else if (!transfer?.reliable && serialConnected) sendSerialCommand(67, 0);
+}
+
+function setFileTransferState(message) {
+  const transfer = activeFileDownload;
+  if ($("file-progress-state")) $("file-progress-state").textContent = message;
+  if ($("files-pause-btn")) $("files-pause-btn").hidden = !transfer?.verified || transfer.state === "paused";
+  if ($("files-resume-btn")) $("files-resume-btn").hidden = !transfer?.verified || transfer.state !== "paused" || !!transfer.needsRestart;
+  if ($("files-restart-btn")) $("files-restart-btn").hidden = !transfer?.verified || transfer.state !== "paused";
+}
+
+function pauseFileDownload(reason = "Paused. Resume to continue from the first missing chunk.", stopSender = true) {
+  const transfer = activeFileDownload;
+  if (!transfer?.verified) { if (transfer) resetDownloadProgress(); return; }
+  if (transfer.timeout) clearTimeout(transfer.timeout);
+  transfer.state = "paused";
+  if (stopSender) sendFileAbort(transfer);
+  setFileTransferState(reason);
+  if ($("files-stat-rate")) $("files-stat-rate").textContent = "Paused";
+  log(reason + ` Retained ${transfer.chunks.size} chunks of ${transfer.name}.`);
+}
+
+async function resumeFileDownload(restart = false) {
+  const transfer = activeFileDownload;
+  if (!transfer?.verified || transfer.state !== "paused" || (transfer.needsRestart && !restart)) return;
+  const connection = activeConn();
+  if (!connection || (connection.device?.id || connection.id) !== transfer.deviceId) {
+    setFileTransferState("Select the same bridge used for this download, then Resume."); return;
   }
-  log("Sent abort command for active file transfer");
+  transfer.state = "reconnecting";
+  setFileTransferState("Reconnecting to the original bridge…");
+  if (!connection.connected) await reconnectConn(connection);
+  if (activeFileDownload !== transfer) return;
+  if (!connection.connected) { pauseFileDownload("Reconnect failed. Try Resume again.", false); return; }
+  transfer.connection = connection;
+  const listed = sdFileList.find(file => file.name === transfer.name);
+  if (listed) transfer.index = listed.index;
+  if (restart) {
+    transfer.chunks.clear(); transfer.snapshotSize = null; transfer.expectedCrc = null;
+    transfer.needsRestart = false;
+  }
+  transfer.state = "requesting";
+  transfer.startTime = Date.now();
+  transfer.startBytes = Math.min(transfer.size, transfer.chunks.size * 96);
+  transfer.manifestAccepted = false;
+  setFileTransferState(restart ? "Checking a new SD snapshot…" : "Checking the original snapshot before resuming…");
+  requestReliableFile(transfer);
+  armFileTransferTimeout();
+}
+
+function abortFileDownload() {
+  sendFileAbort(activeFileDownload);
+  log("Cancelled transfer and discarded partial download");
   resetDownloadProgress();
 }
 
@@ -3833,7 +3992,7 @@ function updateDownloadProgress(seq, total) {
   const pct = Math.min(100, Math.round((received / total) * 100));
   const elapsedSec = (Date.now() - activeFileDownload.startTime) / 1000;
   const estBytes = Math.min(activeFileDownload.size, received * 96);
-  const speedKb = elapsedSec > 0 ? (estBytes / 1024 / elapsedSec).toFixed(1) : "0.0";
+  const speedKb = elapsedSec > 0 ? ((estBytes - (activeFileDownload.startBytes || 0)) / 1024 / elapsedSec).toFixed(1) : "0.0";
 
   if ($("file-progress-pct")) $("file-progress-pct").textContent = pct + "%";
   if ($("file-progress-bar")) $("file-progress-bar").style.width = pct + "%";
@@ -3857,11 +4016,11 @@ function isIosDevice() {
     (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
 }
 
-function showFileReadyCard(name, size, isText) {
+function showFileReadyCard(name, size, isText, verified = false) {
   const card = $("file-ready-card");
   if (!card) return;
   if ($("ready-filename")) $("ready-filename").textContent = name;
-  if ($("ready-filesize")) $("ready-filesize").textContent = formatBytes(size);
+  if ($("ready-filesize")) $("ready-filesize").textContent = formatBytes(size) + (verified ? " · CRC32 verified" : " · size checked");
   if ($("ready-copy-btn")) $("ready-copy-btn").style.display = isText ? "inline-block" : "none";
   if ($("ready-status-msg")) {
     $("ready-status-msg").textContent = isIosDevice()
@@ -3935,12 +4094,25 @@ async function copyReadyFileText() {
   }
 }
 
+function fileCrcUpdate(state, bytes) {
+  for (const byte of bytes) {
+    state ^= byte;
+    for (let bit = 0; bit < 8; ++bit) state = (state >>> 1) ^ ((state & 1) ? 0xedb88320 : 0);
+  }
+  return state >>> 0;
+}
+
 function finishFileDownload(name, size) {
   if (!activeFileDownload) return;
   // Missing early ESP-NOW/BLE chunks used to be silently skipped, producing
   // "successful" CSV downloads with no WiGLE metadata or column header.
   const fail = reason => {
     log(`File download failed: ${name}: ${reason}. Retry the download.`);
+    if (activeFileDownload?.verified) {
+      activeFileDownload.needsRestart = true;
+      pauseFileDownload(`Verification failed: ${reason}. Restart to fetch a fresh copy.`, false);
+      return;
+    }
     resetDownloadProgress();
     alert(`Incomplete file: ${name}. ${reason}. Please retry the download.`);
   };
@@ -3954,7 +4126,7 @@ function finishFileDownload(name, size) {
     return;
   }
   const byteArrays = [];
-  let totalBytes = 0;
+  let totalBytes = 0, crcState = 0xffffffff;
   for (let i = 1; i <= total; i++) {
     if (!activeFileDownload.chunks.has(i)) {
       fail(`Missing chunk ${i} of ${total}`);
@@ -3971,15 +4143,21 @@ function finishFileDownload(name, size) {
       const bytes = new Uint8Array(len);
       for (let j = 0; j < len; j++) bytes[j] = binaryString.charCodeAt(j);
       byteArrays.push(bytes);
+      if (activeFileDownload.verified) crcState = fileCrcUpdate(crcState, bytes);
       totalBytes += len;
     } catch(e) {
       fail(`Invalid data in chunk ${i}`);
       return;
     }
   }
+  const verified = !!activeFileDownload.verified;
+  if (verified && (!activeFileDownload.manifestAccepted ||
+      ((crcState ^ 0xffffffff) >>> 0) !== activeFileDownload.expectedCrc)) {
+    fail("Whole-file CRC32 does not match the SD snapshot"); return;
+  }
   const fileInfo = getFileTypeInfo(name);
   const blob = new Blob(byteArrays, { type: fileInfo.mime });
-  log(`File download complete: ${name} (${formatBytes(totalBytes)})`);
+  log(`File download complete: ${name} (${formatBytes(totalBytes)})${verified ? " — CRC32 verified" : " — size checked"}`);
 
   if (activeFileDownload.isPreview) {
     displayFilePreview(name, blob);
@@ -4005,7 +4183,7 @@ function finishFileDownload(name, size) {
     }).catch(() => {});
   }
 
-  showFileReadyCard(name, totalBytes, fileInfo.isText);
+  showFileReadyCard(name, totalBytes, fileInfo.isText, verified);
 
   // For Desktop and Android, attempt standard automatic download
   if (!isIosDevice()) {
@@ -4056,23 +4234,37 @@ function armFileTransferTimeout() {
     if (activeFileDownload !== transfer) return;
     const received = transfer.chunks.size;
     log(`Bluetooth ACK transfer stalled: token=${transfer.token}, received=${received}/${transfer.totalChunks}, bytes=${transfer.size}`);
+    if (transfer.verified) {
+      pauseFileDownload("Transfer interrupted. Resume after reconnecting. If no data arrives, update both chips for verified transfers."); return;
+    }
     resetDownloadProgress();
     alert(`Bluetooth transfer stalled after ${received} of ${transfer.totalChunks} chunks. See the transfer log for details.`);
-  }, 12000);
+  }, transfer.state === "requesting" ? 20000 : 12000);
 }
 
 function requestReliableFile(transfer) {
   const token = new Uint32Array(1);
   do { crypto.getRandomValues(token); } while (!token[0]);
   transfer.token = token[0];
-  const bytes = new Uint8Array(7);
-  bytes.set([68, transfer.index, TGT_SCREEN]);
-  new DataView(bytes.buffer).setUint32(3, transfer.token, true);
+  const bytes = new Uint8Array(transfer.verified ? 19 : 7);
+  bytes.set([transfer.verified ? 70 : 68, transfer.index, TGT_SCREEN]);
+  const view = new DataView(bytes.buffer);
+  view.setUint32(3, transfer.token, true);
+  if (transfer.verified && transfer.snapshotSize != null) {
+    let next = 1;
+    while (transfer.chunks.has(next)) ++next;
+    view.setUint32(7, next, true);
+    view.setUint32(11, transfer.snapshotSize, true);
+    view.setUint32(15, transfer.expectedCrc, true);
+  }
   const connection = transfer.connection;
   connection.fileAckWrites = (connection.fileAckWrites || Promise.resolve())
     .then(() => connection.cmdCh.writeValue(bytes))
     .catch(error => {
-      if (activeFileDownload === transfer) resetDownloadProgress();
+      if (activeFileDownload === transfer) {
+        if (transfer.verified) pauseFileDownload("Request failed: " + error.message, false);
+        else resetDownloadProgress();
+      }
       log("File request failed: " + error.message);
     });
 }
@@ -4098,7 +4290,7 @@ function parseReliableFileChunk(msg, connection) {
   const size = Number(parts[3]), kind = Number(parts[4]);
   const data = parts.slice(5).join(",");
   if (![token, seq, size].every(n => Number.isInteger(n) && n >= 0 && n <= 0xffffffff) ||
-      !token || !seq || ![0, 1, 2].includes(kind)) return;
+      !token || !seq || ![0, 1, 2, 3, 4, 5].includes(kind)) return;
   if (lastReliableFile?.connection === connection && lastReliableFile.token === token &&
       lastReliableFile.seq === seq && lastReliableFile.kind === kind && kind !== 0) {
     acknowledgeFileChunk(connection, token, seq);
@@ -4106,7 +4298,11 @@ function parseReliableFileChunk(msg, connection) {
   }
   const transfer = activeFileDownload;
   if (!transfer?.reliable || transfer.connection !== connection) return;
-  if (transfer.token !== token) return;
+  if (transfer.token !== token || transfer.state === "paused") return;
+  if (transfer.verified) {
+    parseVerifiedFileChunk(transfer, connection, token, seq, size, kind, data);
+    return;
+  }
   if (transfer.snapshotSize == null) {
     if (kind !== 2 && (kind !== 0 || seq !== 1)) return;
     transfer.snapshotSize = size;
@@ -4137,6 +4333,57 @@ function parseReliableFileChunk(msg, connection) {
   } else {
     finishFileDownload(data, size);
   }
+}
+
+function parseVerifiedFileChunk(transfer, connection, token, seq, size, kind, data) {
+  if (kind === 5 && seq === 0xfffffffe) {
+    setFileTransferState("Checking the SD snapshot…");
+    armFileTransferTimeout(); acknowledgeFileChunk(connection, token, seq); return;
+  }
+  if (kind === 2) {
+    lastReliableFile = {connection, token, seq, kind};
+    acknowledgeFileChunk(connection, token, seq);
+    transfer.needsRestart = /FILE_CHANGED|INVALID_RESUME/.test(data);
+    pauseFileDownload("Device: " + data, false); return;
+  }
+  if (kind === 3 || kind === 4) {
+    const match = /^([0-9a-f]{8}),(.*)$/i.exec(data);
+    if (!match) return;
+    const checksum = parseInt(match[1], 16), name = match[2];
+    if (name !== transfer.name) {
+      pauseFileDownload("The file list changed. Refresh List, then Resume the original file."); return;
+    }
+    if (transfer.snapshotSize != null && (size !== transfer.snapshotSize || checksum !== transfer.expectedCrc)) {
+      transfer.needsRestart = true;
+      pauseFileDownload("The SD file changed. Restart to download the new version."); return;
+    }
+    if (kind === 3 && seq === 0xffffffff) {
+      transfer.snapshotSize = transfer.size = size;
+      transfer.totalChunks = Math.ceil(size / 96) || 1;
+      transfer.expectedCrc = checksum;
+      transfer.manifestAccepted = true;
+      transfer.state = "receiving";
+      setFileTransferState("Receiving snapshot; whole-file verification follows.");
+      updateDownloadProgress(0, transfer.totalChunks);
+      armFileTransferTimeout(); acknowledgeFileChunk(connection, token, seq); return;
+    }
+    if (kind === 4 && transfer.manifestAccepted && seq === transfer.totalChunks + 1 && transfer.chunks.size === transfer.totalChunks) {
+      lastReliableFile = {connection, token, seq, kind};
+      acknowledgeFileChunk(connection, token, seq);
+      setFileTransferState("Verifying the complete file…");
+      finishFileDownload(name, size);
+    }
+    return;
+  }
+  if (kind !== 0 || !transfer.manifestAccepted || size !== transfer.size || seq > transfer.totalChunks) return;
+  try { if (atob(data).length !== Math.min(96, size - (seq - 1) * 96)) return; } catch { return; }
+  if (transfer.chunks.has(seq) && transfer.chunks.get(seq) !== data) {
+    transfer.needsRestart = true;
+    pauseFileDownload("Conflicting data received. Restart for a fresh verified copy."); return;
+  }
+  transfer.chunks.set(seq, data);
+  updateDownloadProgress(seq, transfer.totalChunks);
+  armFileTransferTimeout(); acknowledgeFileChunk(connection, token, seq);
 }
 
 function parseFileMessage(msg, connection = null) {
@@ -4199,7 +4446,8 @@ function parseFileMessage(msg, connection = null) {
   if (msg.startsWith("$FILEABORT,")) {
     const parts = msg.split(",");
     log("File transfer aborted: " + (parts[1] || ""));
-    resetDownloadProgress();
+    if (activeFileDownload?.verified) pauseFileDownload("Transfer stopped. Resume to continue.", false);
+    else resetDownloadProgress();
     return;
   }
   if (msg.startsWith("$FILEDELETE,")) {
@@ -4211,6 +4459,7 @@ function parseFileMessage(msg, connection = null) {
   if (msg.startsWith("$FILEERR,")) {
     const parts = msg.split(",");
     log("SD file error: " + parts.slice(1).join(","));
+    if (activeFileDownload?.verified) { pauseFileDownload("SD error: " + parts.slice(1).join(","), false); return; }
     resetDownloadProgress();
     alert("SD Card Error: " + parts.slice(1).join(","));
     return;
@@ -4220,6 +4469,9 @@ function parseFileMessage(msg, connection = null) {
 if ($("connect-serial")) $("connect-serial").addEventListener("click", toggleSerial);
 if ($("files-refresh-btn")) $("files-refresh-btn").addEventListener("click", requestFileList);
 if ($("files-abort-btn")) $("files-abort-btn").addEventListener("click", abortFileDownload);
+if ($("files-pause-btn")) $("files-pause-btn").addEventListener("click", () => pauseFileDownload());
+if ($("files-resume-btn")) $("files-resume-btn").addEventListener("click", () => resumeFileDownload());
+if ($("files-restart-btn")) $("files-restart-btn").addEventListener("click", () => resumeFileDownload(true));
 if ($("ready-share-btn")) $("ready-share-btn").addEventListener("click", shareReadyFile);
 if ($("ready-dl-btn")) $("ready-dl-btn").addEventListener("click", () => {
   if (lastDownloadedFile) downloadBlob(lastDownloadedFile.blob, lastDownloadedFile.name);

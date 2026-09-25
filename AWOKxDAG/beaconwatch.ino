@@ -73,7 +73,7 @@ void appendBeaconWatchLog() {
 void drawBeaconWatch() {
   currentView = View::kBeaconWatch;
   display.fillScreen(kBackground);
-  drawHeader("BEACON WATCH", beaconWatchAlert ? "ALERT: beacon flood nearby"
+  drawMonitorHeader("BEACON WATCH", beaconWatchActive, beaconWatchAlert ? "ALERT: beacon flood nearby"
                                               : "watching for fake-AP floods");
   display.setTextSize(2);
   display.setTextColor(beaconWatchAlert ? kBad : kGood, kBackground);
@@ -111,7 +111,7 @@ void drawBeaconWatch() {
   display.print("short window indicate a beacon");
   display.setCursor(6, 206);
   display.print("flood / fake-AP spam. Passive.");
-  drawFooter("Back", "Reset");
+  drawFooter(beaconWatchActive ? "Stop" : "Back", "Reset");
 }
 
 void resetBeaconWatch() {

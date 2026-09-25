@@ -53,7 +53,7 @@ bool bridgeFileTransferActive() {
 
 void bridgeQueueFileChunk(const AxdFileChunkMsg& chunk) {
   if (!g_bridgeReliableFile.load() || chunk.token != g_bridgeFileReadyToken.load() ||
-      chunk.token == 0 || chunk.kind > 2 || chunk.seq == 0) return;
+      chunk.token == 0 || chunk.kind > 5 || chunk.seq == 0) return;
   const unsigned head = g_bridgeFileHead.load();
   const unsigned next = (head + 1) % 4;
   if (next == g_bridgeFileTail.load()) return;  // sender will retry; never ACK here
@@ -69,7 +69,7 @@ void bridgeServiceFileTransfer() {
   const AxdFileChunkMsg chunk = g_bridgeFileQueue[tail];
   g_bridgeFileTail.store((tail + 1) % 4);
   if (chunk.token != g_bridgeFileReadyToken.load() || !g_bridgePhoneConnected) return;
-  if (chunk.kind != 0) g_bridgeFileDoneSeq.store(chunk.seq);
+  if (chunk.kind == 1 || chunk.kind == 2 || chunk.kind == 4) g_bridgeFileDoneSeq.store(chunk.seq);
   char line[220];
   snprintf(line, sizeof(line), "$FILECHUNK,%lu,%lu,%lu,%u,%s",
            static_cast<unsigned long>(chunk.token), static_cast<unsigned long>(chunk.seq),
@@ -101,10 +101,11 @@ bool bridgeFileReceiverReady(uint32_t token) {
          g_bridgeFileReadyToken.load() == token;
 }
 
-static void bridgeRelayToScreen(uint8_t op, uint8_t arg, uint32_t fileToken) {
+static void bridgeRelayToScreen(uint8_t op, uint8_t arg, uint32_t fileToken,
+                                uint32_t startSeq, uint32_t snapshotBytes, uint32_t checksum) {
   if (!linkEnsureEspNow()) return;
   g_bridgeFileReadyToken.store(0);
-  g_bridgeReliableFile.store(op == kAxdCmdFileGetReliable);
+  g_bridgeReliableFile.store(op == kAxdCmdFileGetReliable || op == kAxdCmdFileGetVerified);
   g_bridgeFileDoneSeq.store(0);
   g_bridgeFileActivityMs.store(millis());
   g_bridgeSeq++;
@@ -114,10 +115,13 @@ static void bridgeRelayToScreen(uint8_t op, uint8_t arg, uint32_t fileToken) {
   p.reserved = static_cast<uint16_t>(op) | (static_cast<uint16_t>(arg) << 8);
   memcpy(p.srcMac, linkSelfMac, 6);
   const bool fileReply = op == kAxdCmdFileList || op == kAxdCmdFileGet ||
-                         op == kAxdCmdFileGetReliable || op == kAxdCmdFileDelete;
+                         op == kAxdCmdFileGetReliable || op == kAxdCmdFileGetVerified || op == kAxdCmdFileDelete;
   if (fileReply) {
     p.flags |= kLinkCommandWaitFileReady;
-    p.sessionId = op == kAxdCmdFileGetReliable ? fileToken : 0;
+    p.sessionId = (op == kAxdCmdFileGetReliable || op == kAxdCmdFileGetVerified) ? fileToken : 0;
+    if (op == kAxdCmdFileGetVerified) {
+      p.masterMillis = startSeq; p.networks = snapshotBytes; p.bleCount = checksum;
+    }
     while (p.sessionId == 0) p.sessionId = esp_random();
   }
 
@@ -175,6 +179,7 @@ bool bridgeNotifyResult(uint8_t source, const uint8_t* body, size_t len) {
 volatile uint8_t g_bridgePendOp = 0, g_bridgePendArg = 0, g_bridgePendTarget = 0;
 volatile bool g_bridgeCmdPending = false;
 volatile uint32_t g_bridgePendFileToken = 0;
+volatile uint32_t g_bridgePendStartSeq = 0, g_bridgePendSnapshotBytes = 0, g_bridgePendCrc = 0;
 
 class BridgeCmdCallbacks : public NimBLECharacteristicCallbacks {
   void onWrite(NimBLECharacteristic* c, NimBLEConnInfo&) override {
@@ -185,12 +190,23 @@ class BridgeCmdCallbacks : public NimBLECharacteristicCallbacks {
       return;
     }
     g_bridgePendFileToken = 0;
-    if (v.data()[0] == kAxdCmdFileGetReliable) {
-      if (v.length() != 7) return;
+    g_bridgePendStartSeq = g_bridgePendSnapshotBytes = g_bridgePendCrc = 0;
+    if (v.data()[0] == kAxdCmdFileGetReliable || v.data()[0] == kAxdCmdFileGetVerified) {
+      const bool verified = v.data()[0] == kAxdCmdFileGetVerified;
+      if (v.length() != (verified ? 19 : 7)) return;
       uint32_t token = 0;
       for (int i = 0; i < 4; ++i) token |= static_cast<uint32_t>(v.data()[3 + i]) << (8 * i);
       if (token == 0) return;
       g_bridgePendFileToken = token;
+      if (verified) {
+        uint32_t start = 0, size = 0, crc = 0;
+        for (int i = 0; i < 4; ++i) {
+          start |= static_cast<uint32_t>(v.data()[7 + i]) << (8 * i);
+          size |= static_cast<uint32_t>(v.data()[11 + i]) << (8 * i);
+          crc |= static_cast<uint32_t>(v.data()[15 + i]) << (8 * i);
+        }
+        g_bridgePendStartSeq = start; g_bridgePendSnapshotBytes = size; g_bridgePendCrc = crc;
+      }
     }
     g_bridgePendOp = v.data()[0];
     g_bridgePendArg = v.length() > 1 ? v.data()[1] : 0;
@@ -207,15 +223,16 @@ void bridgeServiceCommand() {
   g_bridgeCmdPending = false;
   const uint8_t op = g_bridgePendOp, arg = g_bridgePendArg;
   const uint32_t fileToken = g_bridgePendFileToken;
+  const uint32_t startSeq = g_bridgePendStartSeq, snapshotBytes = g_bridgePendSnapshotBytes, checksum = g_bridgePendCrc;
   uint8_t target = g_bridgePendTarget;
   // SD card is physically on the Screen chip; always relay file commands to screen
-  if (op == kAxdCmdFileList || op == kAxdCmdFileGet || op == kAxdCmdFileGetReliable || op == kAxdCmdFileDelete ||
+  if (op == kAxdCmdFileList || op == kAxdCmdFileGet || op == kAxdCmdFileGetReliable || op == kAxdCmdFileGetVerified || op == kAxdCmdFileDelete ||
       op == kAxdCmdFileAbort || op == kAxdCmdFiles) {
     target = kTargetScreen;
   }
   Serial.printf("[bridge] cmd op=%u arg=%u target=%u\n", op, arg, target);
   if (target == kTargetScreen) {
-    bridgeRelayToScreen(op, arg, fileToken);
+    bridgeRelayToScreen(op, arg, fileToken, startSeq, snapshotBytes, checksum);
   } else {
     linkDispatchCommand(op, arg);  // run on this chip
   }

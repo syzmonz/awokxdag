@@ -11,7 +11,11 @@ constexpr uint32_t kNetResponseMs = 2500;
 const uint16_t kNetPorts[] = {21,22,23,25,53,80,110,139,143,443,445,554,631,1883,3306,3389,8080,8443,9100};
 const uint16_t kNetCameraPorts[] = {554,8554,80,8000,8080,8899};
 const uint16_t kNetPrinterPorts[] = {9100,631,515};
-const char* const kNetMenu[] = {"Connect / Wi-Fi", "Discover Hosts", "TCP Ports", "LAN Cameras", "Printers", "SIP Services", "UPnP Mappings", "Last Results", "Wardrive Upload"};
+const char* const kNetServiceLabels[] = {"TCP Ports", "LAN Cameras", "Printers", "SIP Services", "UPnP Mappings"};
+const char* const kNetServiceDescriptions[] = {"Common ports on discovered hosts", "RTSP / ONVIF service evidence", "Printer service candidates", "SIP OPTIONS service evidence", "Read gateway port mappings"};
+const NetJob kNetServiceJobs[] = {NetJob::Ports, NetJob::Cameras, NetJob::Printers, NetJob::Sip, NetJob::Upnp};
+constexpr int kNetMenuRows = 4;
+constexpr int kNetResultRows = 3;
 NetHost* netHosts = nullptr;
 NetResult* netResults = nullptr;
 char* netResponse = nullptr;
@@ -25,6 +29,10 @@ bool netEditPassword = false;
 AwokKeyboard::Mode netKeyMode = AwokKeyboard::Lower;
 AwokKeyboard::Tap netKeyTap;
 int netMenuPage = 0, netPage = 0, netApPage = 0;
+int netMenuSection = 0;  // 0 overview, 1 services, 2 results/upload
+int netHostsPage = 0, netServicesPage = 0, netResultsHost = -1;
+bool netResultsActions = false;
+bool netSetupReturnResults = false;
 int netHostCount = 0, netResultCount = 0, netSelectedHost = -1, netSelectedResult = 0;
 bool netShowHosts = true, netLimited = false, netSubnetLimited = false;
 uint32_t netFirst = 0, netLast = 0, netCursor = 0, netDeadline = 0, netLastDraw = 0;
@@ -83,7 +91,8 @@ void netReleaseWorkspaceForUpload() {
   netHostSummary = NetSummary{}; netResultSummary = NetSummary{};
   netLastJob = NetJob::None;
   netHostsLimited = netLimited = netSubnetLimited = false;
-  netShowHosts = true;
+  netShowHosts = true; netPage = netHostsPage = netServicesPage = 0;
+  netResultsHost = -1; netResultsActions = false;
 }
 
 void netSnapshot() {
@@ -158,17 +167,78 @@ void netText(int y, const String& value) {
   display.print(clipped(value, 37));
 #endif
 }
+String netConnectionLabel() {
+  if (netJob == NetJob::Join) return "Connecting...";
+  return WiFi.status() == WL_CONNECTED ? "Wi-Fi " + WiFi.localIP().toString() : "Wi-Fi disconnected";
+}
+bool netHostSelectionValid(int index) {
+  return netHosts && index >= 0 && index < netHostCount;
+}
+void netCard(int row, const String& title, const String& detail) {
+  const int y = 58 + row * 50;
+#ifdef AWOK_MINI_DISPLAY
+  display.button(8, y, 224, 44, (title + " | " + detail).c_str(), kAccent);
+#else
+  display.drawRoundRect(8, y, 224, 44, 5, kAccent);
+  display.setTextSize(title.length() <= 17 ? 2 : 1);
+  display.setTextColor(ILI9341_WHITE, kBackground);
+  display.setCursor(16, y + 5); display.print(clipped(title, 34));
+  display.setTextSize(1); display.setTextColor(kMuted, kBackground);
+  display.setCursor(16, y + 29); display.print(clipped(detail, 34));
+#endif
+}
+void netPager(const char* back, int page, int pages, bool allowBack) {
+  if (allowBack) drawSmallButton(4, 280, 72, 36, back, kMuted);
+  if (page > 0) drawSmallButton(84, 280, 72, 36, "Prev", kAccent);
+  if (page + 1 < pages) drawSmallButton(164, 280, 72, 36, "Next", kAccent);
+}
+void netRememberResultsPage() {
+  if (netShowHosts) netHostsPage = netPage; else netServicesPage = netPage;
+}
+void netOpenResults(bool hosts) {
+  netRememberResultsPage();
+  netShowHosts = hosts; netPage = hosts ? netHostsPage : netServicesPage;
+  netResultsActions = false;
+  netStatus = hosts ? netHostSummary.status : netResultSummary.status;
+  drawNetworkResults();
+}
+void netOpenSetup(bool fromResults) {
+  netSetupReturnUpload = false; netSetupReturnResults = fromResults;
+  drawNetworkSetup();
+}
+void netReturnFromSetup() {
+  if (netSetupReturnUpload) drawWardriveUpload();
+  else if (netSetupReturnResults) drawNetworkResults();
+  else drawNetworkMenu();
+}
 void drawNetworkMenu() {
   currentView = View::kNetworkMenu;
   display.fillScreen(kBackground);
-  drawHeader("NETWORK TOOLS", WiFi.status() == WL_CONNECTED ? WiFi.localIP().toString() : "connect to your test network");
-  for (int row = 0; row < 6; ++row) {
-    const int item = netMenuPage * 6 + row;
-    if (item >= 9) break;
-    netButton(20, 50 + row * 32, 200, 30, kNetMenu[item]);
+  drawHeader(netMenuSection == 1 ? "LAN SERVICES" : netMenuSection == 2 ? "RESULTS / UPLOAD" : "NETWORK TOOLS", netConnectionLabel());
+  if (netMenuSection == 0) {
+    netMenuPage = 0;
+    netCard(0, "Connection", WiFi.status() == WL_CONNECTED ? WiFi.SSID() : "Choose Wi-Fi and join first");
+    netCard(1, "Hosts", String(netHostCount) + " found | discover / select");
+    netCard(2, "Services", "Ports / cameras / printers / more");
+    netCard(3, "Results & Upload", "Previous findings / wardrive CSV");
+  } else if (netMenuSection == 1) {
+    netMenuPage = max(0, min(netMenuPage, 1));
+    netText(44, netMenuPage ? "Scope: connected gateway" : "Scope: all discovered hosts");
+    for (int row = 0; row < kNetMenuRows; ++row) {
+      const int index = netMenuPage * kNetMenuRows + row;
+      if (index >= 5) break;
+      netCard(row, kNetServiceLabels[index], kNetServiceDescriptions[index]);
+    }
+  } else {
+    netMenuPage = 0;
+    netCard(0, "Last hosts", String(netHostCount) + " hosts | inspect / export");
+    netCard(1, "Last services", String(netResultCount) + " results | inspect / export");
+    netCard(2, "Wardrive Upload", "Choose CSV, network, destination");
+    netText(222, "Uploads start only with Upload.");
+    netText(238, "Upload clears previous LAN results.");
   }
-  if (netMenuPage) netText(130, clipped(netStatus, 37));
-  drawThreeButtonFooter("Back", "< Prev", "Next >");
+  if (netMenuSection != 2) netText(264, netStatus);
+  netPager("Back", netMenuPage, netMenuSection == 1 ? 2 : 1, true);
 }
 void openNetworkTools() {
   signalMonitorActive = false;
@@ -179,6 +249,8 @@ void openNetworkTools() {
   }
   netOpen = true; netHostCount = netResultCount = 0; netMenuPage = netPage = 0;
   netSelectedHost = -1; netJob = netLastJob = NetJob::None;
+  netMenuSection = 0; netHostsPage = netServicesPage = 0; netResultsHost = -1;
+  netResultsActions = netSetupReturnResults = netSetupReturnUpload = false;
   netHostSummary = NetSummary{}; netResultSummary = NetSummary{}; netHostsLimited = false;
   netLimited = netSubnetLimited = false; netStatus = "";
   netSsid = selectedWifi.ssid;
@@ -187,14 +259,21 @@ void openNetworkTools() {
 void drawNetworkSetup() {
   currentView = View::kNetworkSetup;
   display.fillScreen(kBackground);
-  drawHeader("CONNECT WI-FI", "credentials kept in RAM only");
-  netButton(20, 50, 200, 30, "SSID: " + clipped(netSsid, 22));
-  netButton(20, 90, 200, 30, netPassword.length() ? "Password: ********" : "Password: empty");
-  netButton(20, 130, 200, 30, "Choose scanned AP");
-  netButton(20, 170, 200, 30, netJob == NetJob::Join ? "Connecting..." : "Join network");
-  netText(220, clipped(netStatus, 37));
-  if (WiFi.status() == WL_CONNECTED) netText(240, "IP: " + WiFi.localIP().toString());
-  netFooter("Back", netJob == NetJob::Join ? "Cancel" : "Disconnect");
+  drawHeader("CONNECT WI-FI", netConnectionLabel());
+  if (netJob == NetJob::Join) {
+    netText(66, "Joining " + netSsid);
+    netText(92, "Waiting for network (up to 20s).");
+    netText(118, "Password cleared after this attempt.");
+    drawSmallButton(8, 218, 224, 44, "Cancel connection", kMuted);
+    return;
+  }
+  netCard(0, "SSID", netSsid.length() ? netSsid : "Select to enter network name");
+  netCard(1, "Password", netPassword.length() ? "********" : "Empty (open network)");
+  netCard(2, "Choose scanned AP", "Pick from scan / rescan networks");
+  netCard(3, "Join network", "Credentials kept in RAM only");
+  netText(264, netStatus);
+  drawSmallButton(4, 280, 112, 36, "Back", kMuted);
+  if (WiFi.status() == WL_CONNECTED) drawSmallButton(124, 280, 112, 36, "Disconnect", kAccent);
 }
 void drawNetworkEditor() {
   currentView = View::kNetworkEdit;
@@ -258,54 +337,85 @@ void drawNetworkEditor() {
 void drawNetworkAps() {
   currentView = View::kNetworkAps;
   display.fillScreen(kBackground);
-  drawHeader("CHOOSE NETWORK", "hidden names can be entered manually");
-  const int pages = max(1, (wifiCount + 5) / 6);
-  netApPage = (netApPage + pages) % pages;
-  for (int row = 0; row < 6; ++row) {
-    int index = netApPage * 6 + row;
+  drawHeader("CHOOSE NETWORK", netConnectionLabel());
+  const int pages = max(1, (wifiCount + kNetMenuRows - 1) / kNetMenuRows);
+  netApPage = max(0, min(netApPage, pages - 1));
+  netText(44, String(wifiCount) + " APs | " + String(netApPage + 1) + "/" + String(pages));
+  for (int row = 0; row < kNetMenuRows; ++row) {
+    const int index = netApPage * kNetMenuRows + row;
     if (index >= wifiCount) break;
-    netButton(10, 50 + row * 32, 220, 30, clipped(wifiEntries[index].ssid.length() ? wifiEntries[index].ssid : "<hidden>", 26));
+    netCard(row, wifiEntries[index].ssid.length() ? wifiEntries[index].ssid : "<hidden>",
+            wifiEntries[index].ssid.length() ? "Select, then enter key and Join" : "Enter hidden SSID manually");
   }
-  drawFourButtonFooter("Back", "Prev", "Next", "Scan");
+  if (!wifiCount) netText(78, "No APs yet. Scan to find networks.");
+  drawSmallButton(4, 280, 56, 36, "Back", kMuted);
+  if (netApPage > 0) drawSmallButton(64, 280, 52, 36, "Prev", kAccent);
+  if (netApPage + 1 < pages) drawSmallButton(124, 280, 52, 36, "Next", kAccent);
+  drawSmallButton(180, 280, 56, 36, "Scan", kAccent);
+}
+int netResultPages() {
+  return max(1, ((netShowHosts ? netHostCount : netResultCount) + kNetResultRows - 1) / kNetResultRows);
 }
 void drawNetworkResults() {
   currentView = View::kNetworkResults;
   display.fillScreen(kBackground);
-  int count = netShowHosts ? netHostCount : netResultCount;
-  const int pages = max(1, (count + 5) / 6);
-  netPage = (netPage + pages) % pages;
-  drawHeader(netShowHosts ? "LAN HOSTS" : "NETWORK RESULTS", String(count) + " found | " + String(netPage + 1) + "/" + String(pages));
-  for (int row = 0; row < 6; ++row) {
-    const int index = netPage * 6 + row;
+  const int count = netShowHosts ? netHostCount : netResultCount;
+  const int pages = netResultPages();
+  netPage = max(0, min(netPage, pages - 1));
+  netRememberResultsPage();
+  const bool running = netJob != NetJob::None;
+  drawHeader(netResultsActions ? "RESULT ACTIONS" : netShowHosts ? "LAN HOSTS" : "LAN RESULTS", netConnectionLabel());
+  if (netResultsActions && !running) {
+    netCard(0, netShowHosts ? "Service results" : "Host list", netShowHosts ? String(netResultCount) + " retained service results" : String(netHostCount) + " discovered hosts");
+    netCard(1, "Save CSV", netShowHosts ? "Save this host snapshot to SD" : "Save this service snapshot to SD");
+    netCard(2, "Discover hosts", "New discovery replaces old results");
+    netCard(3, "Connection", "Join / change network");
+    netText(264, netStatus);
+    drawSmallButton(4, 280, 112, 36, "Back", kMuted);
+    drawSmallButton(124, 280, 112, 36, "Tools", kAccent);
+    return;
+  }
+  netText(44, String(count) + " found | " + String(netPage + 1) + "/" + String(pages) + (running ? " | scanning" : " | stopped"));
+  for (int row = 0; row < kNetResultRows; ++row) {
+    const int index = netPage * kNetResultRows + row;
     if (index >= count) break;
-    String label = netShowHosts ? netIpText(netHosts[index].ip) : netIpText(netResults[index].ip) + ":" + String(netResults[index].port) + " " + netResults[index].kind;
-    netButton(6, 50 + row * 30, 228, 28, clipped(label, 32));
+    netCard(row, netShowHosts ? netIpText(netHosts[index].ip) : netIpText(netResults[index].ip) + ":" + String(netResults[index].port),
+            netShowHosts ? "MAC " + macToString(netHosts[index].mac) : String(netResults[index].kind));
+  }
+  if (!count) {
+    netText(76, running ? "Waiting for responses..." : "No retained entries.");
+    netText(98, running ? "Stop keeps partial results." : netShowHosts ? "Discover hosts to populate this list." : "Choose Services to run a check.");
+    if (!running) drawSmallButton(8, 134, 224, 44, netShowHosts ? "Discover hosts" : "Choose services", kAccent);
   }
   const NetSummary& summary = netShowHosts ? netHostSummary : netResultSummary;
-  const bool running = netJob != NetJob::None;
-  netText(236, clipped(netStatus, 37));
-  netText(250, String(running ? netCompleted : summary.checked) + " checked; " + String(running ? netTimeouts : summary.timeouts) + " timeout; " + String(running ? netErrors : summary.errors) + " err");
-  netText(263, (running ? netLimited : summary.limited) ? "Result cap reached; export is partial" : (running ? netSubnetLimited || netHostsLimited : summary.subnetLimited || summary.hostsLimited) ? "Host discovery limited; partial scope" : "");
-  drawFiveButtonFooter("Back", "Prev", "Next", "Save", netJob == NetJob::None ? (netShowHosts ? "Results" : "Hosts") : "Stop");
+  netText(210, netStatus);
+  netText(220, String(running ? netCompleted : summary.checked) + " checked; " + String(running ? netTimeouts : summary.timeouts) + " timeout; " + String(running ? netErrors : summary.errors) + " err");
+  netText(230, (running ? netLimited : summary.limited) ? "Result cap reached; export is partial" : (running ? netSubnetLimited || netHostsLimited : summary.subnetLimited || summary.hostsLimited) ? "Host discovery limited; partial scope" : "");
+  drawSmallButton(8, 242, 224, 36, running ? "Stop scan" : "Actions / Save CSV", running ? kWarn : kAccent);
+  netPager(!netShowHosts && netHostSelectionValid(netResultsHost) ? "Host" : "Tools", netPage, pages, !running);
 }
 void drawNetworkHost() {
+  if (!netHostSelectionValid(netSelectedHost)) { netOpenResults(true); return; }
   currentView = View::kNetworkHost;
   display.fillScreen(kBackground);
-  drawHeader("INSPECT HOST", netIpText(netHosts[netSelectedHost].ip));
-  netText(50, "MAC: " + macToString(netHosts[netSelectedHost].mac));
-  const char* labels[] = {"TCP Ports", "Camera Services", "Printer Services", "SIP Services"};
-  for (int i = 0; i < 4; ++i) netButton(20, 80 + i * 40, 200, 32, labels[i]);
-  netFooter("Back", "Back");
+  drawHeader("HOST SERVICES", netConnectionLabel());
+  netText(44, "Target: " + netIpText(netHosts[netSelectedHost].ip));
+  for (int i = 0; i < 4; ++i) netCard(i, kNetServiceLabels[i], "Check only this host");
+  netText(264, "MAC: " + macToString(netHosts[netSelectedHost].mac));
+  drawSmallButton(4, 280, 112, 36, "Hosts", kMuted);
+  drawSmallButton(124, 280, 112, 36, "Tools", kAccent);
 }
 void drawNetworkDetail() {
+  if (!netResults || netSelectedResult < 0 || netSelectedResult >= netResultCount) { drawNetworkResults(); return; }
   currentView = View::kNetworkDetail;
   NetResult& item = netResults[netSelectedResult];
   display.fillScreen(kBackground);
-  drawHeader(item.kind, netIpText(item.ip) + ":" + String(item.port));
+  drawHeader("SERVICE DETAIL", netConnectionLabel());
+  netText(48, netIpText(item.ip) + ":" + String(item.port) + " " + item.kind);
   const String detail(item.detail);
-  for (unsigned i = 0; i < detail.length(); i += 36) netText(55 + (i / 36) * 20, detail.substring(i, i + 36));
-  netText(210, "Service evidence; identity unverified.");
-  netFooter("Back", "Back");
+  for (unsigned i = 0; i < detail.length(); i += 36) netText(72 + (i / 36) * 16, detail.substring(i, i + 36));
+  netText(244, "Evidence only; identity unverified.");
+  drawSmallButton(4, 280, 232, 36, "Back to results", kMuted);
 }
 bool netSaveCsv() {
   if (!sdReady) return false;
@@ -366,6 +476,7 @@ void netDisconnect() {
   netHostCount = netResultCount = 0; netSelectedHost = -1;
   netHostSummary = NetSummary{}; netResultSummary = NetSummary{};
   netHostsLimited = false; netStatus = "Disconnected";
+  netPage = netHostsPage = netServicesPage = 0; netResultsHost = -1; netResultsActions = false;
 }
 void netJoin() {
   if (!netSsid.length() || netSsid.length() > 32 || (netPassword.length() && netPassword.length() < 8)) {
@@ -374,6 +485,7 @@ void netJoin() {
   netHostCount = netResultCount = 0; netSelectedHost = -1;
   netHostSummary = NetSummary{}; netResultSummary = NetSummary{};
   netLastJob = NetJob::None; netHostsLimited = false;
+  netPage = netHostsPage = netServicesPage = 0; netResultsHost = -1; netResultsActions = false;
   WiFi.persistent(false);
   if (!ensureWifiStation()) { netStatus = "Wi-Fi initialization failed"; drawNetworkSetup(); return; }
   WiFi.setAutoReconnect(false); esp_wifi_set_storage(WIFI_STORAGE_RAM);
@@ -403,10 +515,10 @@ void netStartJob(NetJob job, int host) {
     drawNetworkMenu();
     return;
   }
-  if (WiFi.status() != WL_CONNECTED) { netStatus = "Connect before scanning"; drawNetworkSetup(); return; }
+  if (WiFi.status() != WL_CONNECTED) { netStatus = "Connect before scanning"; netOpenSetup(currentView == View::kNetworkResults || currentView == View::kNetworkHost); return; }
   netSessionIp = netIpNumber(WiFi.localIP()); netSessionMask = netIpNumber(WiFi.subnetMask());
   if (!NetworkParse::range(netSessionIp, netSessionMask, netFirst, netLast)) {
-    netStatus = "Unsupported subnet (/31, /32 or mask)"; drawNetworkSetup(); return;
+    netStatus = "Unsupported subnet (/31, /32 or mask)"; netOpenSetup(currentView == View::kNetworkResults || currentView == View::kNetworkHost); return;
   }
   if (job != NetJob::Hosts && job != NetJob::Upnp && netHostCount &&
       (netHostSummary.ip != netSessionIp || netHostSummary.mask != netSessionMask ||
@@ -414,8 +526,14 @@ void netStartJob(NetJob job, int host) {
     netHostCount = 0; netSelectedHost = -1;
   }
   if (job != NetJob::Hosts && job != NetJob::Upnp && !netHostCount) {
-    netStatus = "Run Discover Hosts first"; netShowHosts = true; drawNetworkResults(); return;
+    netOpenResults(true); netStatus = "Discover hosts before service checks"; drawNetworkResults(); return;
   }
+  if (host >= 0 && !netHostSelectionValid(host)) {
+    netOpenResults(true); netStatus = "Host list changed; select a host"; drawNetworkResults(); return;
+  }
+  netRememberResultsPage(); netResultsActions = false; netResultsHost = host;
+  if (job == NetJob::Hosts) netHostsPage = netServicesPage = 0;
+  else netServicesPage = 0;
   NetSummary& summary = job == NetJob::Hosts ? netHostSummary : netResultSummary;
   summary = NetSummary{}; summary.ip = netSessionIp; summary.mask = netSessionMask;
   snprintf(summary.ssid, sizeof(summary.ssid), "%s", WiFi.SSID().c_str());
@@ -684,7 +802,24 @@ void netUpdateTcp() {
     if (netJob == NetJob::Upnp) netFinish("Router timeout (partial)"); else netNextProbe();
   }
 }
+void updateNetworkNavigation() {
+  static uint32_t lastDraw = 0;
+  static String lastConnection;
+  if (!netOpen || netJob != NetJob::None || millis() - lastDraw < 1000) return;
+  lastDraw = millis();
+  const String connection = netConnectionLabel();
+  if (connection == lastConnection) return;
+  lastConnection = connection;
+  // Only redraw on a connection change; periodic redraws reset Mini's position
+  // within a wrapped action label while the user is reading it.
+  if (currentView == View::kNetworkMenu) drawNetworkMenu();
+  else if (currentView == View::kNetworkSetup) drawNetworkSetup();
+  else if (currentView == View::kNetworkResults) drawNetworkResults();
+  else if (currentView == View::kNetworkHost) drawNetworkHost();
+  else if (currentView == View::kNetworkDetail) drawNetworkDetail();
+}
 void updateNetworkTools() {
+  updateNetworkNavigation();
   if (currentView == View::kNetworkEdit && netKeyTap.expire(millis())) drawNetworkEditor();
   if (!netOpen || netJob == NetJob::None) return;
   if (netJob == NetJob::Join) {
@@ -700,7 +835,8 @@ void updateNetworkTools() {
   }
   if (WiFi.status() != WL_CONNECTED || netIpNumber(WiFi.localIP()) != netSessionIp || netIpNumber(WiFi.subnetMask()) != netSessionMask) {
     netFinish("Connection changed/lost (partial)");
-    netHostCount = 0; netSelectedHost = -1; return;
+    netHostCount = 0; netSelectedHost = netResultsHost = -1;
+    drawNetworkResults(); return;
   }
   if (netStage == NetStage::ArpSend) {
     if (netCursor == netSessionIp) ++netCursor;
@@ -795,88 +931,123 @@ void handleNetworkTouch(int x, int y) {
     drawNetworkEditor();
     return;
   }
-  if (currentView == View::kNetworkSetup) {
-    if (netJob == NetJob::Join) {
-      if (y >= kFooterTop) { netDisconnect(); drawNetworkSetup(); }
-      return;
-    }
-    if (y >= kFooterTop) {
-      if (x < 120) {
-        if (netSetupReturnUpload) drawWardriveUpload();
-        else drawNetworkMenu();
-      } else { netDisconnect(); drawNetworkSetup(); }
-    } else if ((y >= 50 && y < 80) || (y >= 90 && y < 120)) {
-      netEditPassword = y >= 90; netEdit = netEditPassword ? netPassword : netSsid;
-      netKeyMode = AwokKeyboard::Lower; netKeyTap.commit(); drawNetworkEditor();
-    } else if (y >= 130 && y < 160) { netApPage = 0; drawNetworkAps(); }
-    else if (y >= 170 && y < 200) netJoin();
-    return;
-  }
-  if (currentView == View::kNetworkAps) {
-    if (y >= kFooterTop) {
-      if (x < 60) drawNetworkSetup();
-      else if (x < 120) { --netApPage; drawNetworkAps(); }
-      else if (x < 180) { ++netApPage; drawNetworkAps(); }
-      else {
-        netDisconnect(); scanWifi();
-        if (lastWifiScanOk) drawNetworkAps();
-        else { netStatus = "AP scan failed"; drawNetworkSetup(); }
-      }
-    } else if (y >= 50 && y < 242 && (y - 50) % 32 < 30) {
-      int index = netApPage * 6 + (y - 50) / 32;
-      if (index < wifiCount) {
-        if (netSsid != wifiEntries[index].ssid) netWipe(netPassword);
-        netSsid = wifiEntries[index].ssid; netStatus = "Enter key, then Join"; drawNetworkSetup();
-      }
-    }
-    return;
-  }
-  if (currentView == View::kNetworkMenu) {
-    if (y >= kFooterTop) {
-      if (x < 80) { closeNetworkTools(); drawReconMenu(); }
-      else { netMenuPage = 1 - netMenuPage; drawNetworkMenu(); }
-    } else if (y >= 50 && y < 242 && (y - 50) % 32 < 30) {
-      int item = netMenuPage * 6 + (y - 50) / 32;
-      if (item == 0) { netSetupReturnUpload = false; drawNetworkSetup(); }
-      else if (item == 1) netStartJob(NetJob::Hosts, -1);
-      else if (item == 2) netStartJob(NetJob::Ports, -1);
-      else if (item == 3) netStartJob(NetJob::Cameras, -1);
-      else if (item == 4) netStartJob(NetJob::Printers, -1);
-      else if (item == 5) netStartJob(NetJob::Sip, -1);
-      else if (item == 6) netStartJob(NetJob::Upnp, -1);
-      else if (item == 7) drawNetworkResults();
-      else if (item == 8) openWardriveUpload();
-    }
-    return;
-  }
-  if (currentView == View::kNetworkResults) {
-    if (y >= kFooterTop) {
-      if (x < 48) {
-        if (netJob != NetJob::None) netFinish("Cancelled (partial)");
-        drawNetworkMenu();
-      } else if (x < 96) { --netPage; drawNetworkResults(); }
-      else if (x < 144) { ++netPage; drawNetworkResults(); }
-      else if (x < 192) {
-        netStatus = netSaveCsv() ? "Snapshot saved" : "SD save failed / missing"; drawNetworkResults();
-      } else if (netJob != NetJob::None) netFinish("Cancelled (partial)");
-      else { netShowHosts = !netShowHosts; netPage = 0; netStatus = netShowHosts ? netHostSummary.status : netResultSummary.status; drawNetworkResults(); }
-    } else if (netJob == NetJob::None && y >= 50 && y < 230 && (y - 50) % 30 < 28) {
-      int index = netPage * 6 + (y - 50) / 30;
-      if (netShowHosts && index < netHostCount) { netSelectedHost = index; drawNetworkHost(); }
-      else if (!netShowHosts && index < netResultCount) { netSelectedResult = index; drawNetworkDetail(); }
-    }
-    return;
-  }
-  if (currentView == View::kNetworkHost) {
-    if (y >= kFooterTop) drawNetworkResults();
-    else if (y >= 80 && y < 240 && (y - 80) % 40 < 32) {
-      const NetJob jobs[] = {NetJob::Ports, NetJob::Cameras, NetJob::Printers, NetJob::Sip};
-      netStartJob(jobs[(y - 80) / 40], netSelectedHost);
-    }
-    return;
-  }
-  if (currentView == View::kNetworkDetail && y >= kFooterTop) drawNetworkResults();
+  if (currentView == View::kNetworkSetup) { handleNetworkSetupTouch(x, y); return; }
+  if (currentView == View::kNetworkAps) { handleNetworkApsTouch(x, y); return; }
+  if (currentView == View::kNetworkMenu) { handleNetworkMenuTouch(x, y); return; }
+  if (currentView == View::kNetworkResults) { handleNetworkResultsTouch(x, y); return; }
+  if (currentView == View::kNetworkHost) { handleNetworkHostTouch(x, y); return; }
+  if (currentView == View::kNetworkDetail && gpsMenuHit(x, y, 4, 280, 232, 36)) drawNetworkResults();
 }
+int netCardHit(int x, int y, int count) {
+  for (int row = 0; row < count; ++row)
+    if (gpsMenuHit(x, y, 8, 58 + row * 50, 224, 44)) return row;
+  return -1;
+}
+void handleNetworkSetupTouch(int x, int y) {
+  if (netJob == NetJob::Join) {
+    if (gpsMenuHit(x, y, 8, 218, 224, 44)) { netDisconnect(); drawNetworkSetup(); }
+    return;
+  }
+  if (gpsMenuHit(x, y, 4, 280, 112, 36)) { netReturnFromSetup(); return; }
+  if (gpsMenuHit(x, y, 124, 280, 112, 36) && WiFi.status() == WL_CONNECTED) { netDisconnect(); drawNetworkSetup(); return; }
+  const int row = netCardHit(x, y, kNetMenuRows);
+  if (row == 0 || row == 1) {
+    netEditPassword = row == 1; netEdit = netEditPassword ? netPassword : netSsid;
+    netKeyMode = AwokKeyboard::Lower; netKeyTap.commit(); drawNetworkEditor();
+  } else if (row == 2) { netApPage = 0; drawNetworkAps(); }
+  else if (row == 3) netJoin();
+}
+void handleNetworkApsTouch(int x, int y) {
+  const int pages = max(1, (wifiCount + kNetMenuRows - 1) / kNetMenuRows);
+  if (gpsMenuHit(x, y, 4, 280, 56, 36)) drawNetworkSetup();
+  else if (gpsMenuHit(x, y, 64, 280, 52, 36) && netApPage > 0) { --netApPage; drawNetworkAps(); }
+  else if (gpsMenuHit(x, y, 124, 280, 52, 36) && netApPage + 1 < pages) { ++netApPage; drawNetworkAps(); }
+  else if (gpsMenuHit(x, y, 180, 280, 56, 36)) {
+    netDisconnect(); scanWifi();
+    if (lastWifiScanOk) drawNetworkAps();
+    else { netStatus = "AP scan failed"; drawNetworkSetup(); }
+  } else {
+    const int row = netCardHit(x, y, kNetMenuRows);
+    const int index = netApPage * kNetMenuRows + row;
+    if (row < 0 || index >= wifiCount) return;
+    if (netSsid != wifiEntries[index].ssid) netWipe(netPassword);
+    netSsid = wifiEntries[index].ssid;
+    netStatus = netSsid.length() ? "Enter key, then Join" : "Enter hidden SSID, then Join";
+    drawNetworkSetup();
+  }
+}
+void handleNetworkMenuTouch(int x, int y) {
+  if (netJob != NetJob::None) return;
+  if (gpsMenuHit(x, y, 4, 280, 72, 36)) {
+    if (netMenuSection) { netMenuSection = netMenuPage = 0; drawNetworkMenu(); }
+    else { closeNetworkTools(); drawReconMenu(); }
+    return;
+  }
+  if (netMenuSection == 1) {
+    if (gpsMenuHit(x, y, 84, 280, 72, 36) && netMenuPage > 0) { --netMenuPage; drawNetworkMenu(); return; }
+    if (gpsMenuHit(x, y, 164, 280, 72, 36) && netMenuPage < 1) { ++netMenuPage; drawNetworkMenu(); return; }
+  }
+  const int row = netCardHit(x, y, kNetMenuRows);
+  if (row < 0) return;
+  if (netMenuSection == 0) {
+    if (row == 0) netOpenSetup(false);
+    else if (row == 1) { netResultsHost = -1; netOpenResults(true); }
+    else { netMenuSection = row == 2 ? 1 : 2; netMenuPage = 0; drawNetworkMenu(); }
+  } else if (netMenuSection == 1) {
+    const int index = netMenuPage * kNetMenuRows + row;
+    if (index < 5) netStartJob(kNetServiceJobs[index], -1);
+  } else if (row < 2) { netResultsHost = -1; netOpenResults(row == 0); }
+  else if (row == 2) { netSetupReturnResults = false; openWardriveUpload(); }
+}
+void handleNetworkResultsTouch(int x, int y) {
+  const bool running = netJob != NetJob::None;
+  if (netResultsActions && !running) {
+    if (gpsMenuHit(x, y, 4, 280, 112, 36)) { netResultsActions = false; drawNetworkResults(); return; }
+    if (gpsMenuHit(x, y, 124, 280, 112, 36)) { netResultsActions = false; drawNetworkMenu(); return; }
+    const int row = netCardHit(x, y, kNetMenuRows);
+    if (row == 0) netOpenResults(!netShowHosts);
+    else if (row == 1) { netStatus = netSaveCsv() ? "Snapshot saved" : "SD save failed / missing"; drawNetworkResults(); }
+    else if (row == 2) netStartJob(NetJob::Hosts, -1);
+    else if (row == 3) netOpenSetup(true);
+    return;
+  }
+  if (gpsMenuHit(x, y, 8, 242, 224, 36)) {
+    if (running) netFinish("Cancelled (partial)");
+    else { netResultsActions = true; drawNetworkResults(); }
+    return;
+  }
+  if (gpsMenuHit(x, y, 4, 280, 72, 36) && !running) {
+    if (!netShowHosts && netHostSelectionValid(netResultsHost)) { netSelectedHost = netResultsHost; drawNetworkHost(); }
+    else drawNetworkMenu();
+    return;
+  }
+  if (gpsMenuHit(x, y, 84, 280, 72, 36) && netPage > 0) { --netPage; drawNetworkResults(); return; }
+  if (gpsMenuHit(x, y, 164, 280, 72, 36) && netPage + 1 < netResultPages()) { ++netPage; drawNetworkResults(); return; }
+  if (running) return;
+  const int count = netShowHosts ? netHostCount : netResultCount;
+  if (!count && gpsMenuHit(x, y, 8, 134, 224, 44)) {
+    if (netShowHosts) netStartJob(NetJob::Hosts, -1);
+    else { netMenuSection = 1; netMenuPage = 0; drawNetworkMenu(); }
+    return;
+  }
+  const int row = netCardHit(x, y, kNetResultRows);
+  const int index = netPage * kNetResultRows + row;
+  if (row < 0 || index >= count) return;
+  netRememberResultsPage();
+  if (netShowHosts) { netSelectedHost = index; drawNetworkHost(); }
+  else { netSelectedResult = index; drawNetworkDetail(); }
+}
+void handleNetworkHostTouch(int x, int y) {
+  if (netJob != NetJob::None) return;
+  if (gpsMenuHit(x, y, 4, 280, 112, 36)) { netOpenResults(true); return; }
+  if (gpsMenuHit(x, y, 124, 280, 112, 36)) { drawNetworkMenu(); return; }
+  const int row = netCardHit(x, y, 4);
+  if (row >= 0) {
+    if (!netHostSelectionValid(netSelectedHost)) { netOpenResults(true); return; }
+    netStartJob(kNetServiceJobs[row], netSelectedHost);
+  }
+}
+
 void handleNetworkSerial() {
   // Existing serial shortcuts cannot switch radios out from under a LAN job.
   // Serial h always exits; passwords are entered through the masked device UI.
