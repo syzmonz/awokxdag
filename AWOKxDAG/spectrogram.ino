@@ -43,7 +43,6 @@ uint32_t lastPeakDecayMs = 0;
 uint32_t specStartMs = 0;
 uint32_t lastSpecRowPushMs = 0;
 uint32_t specSweepIntervalMs = 0;
-static constexpr uint32_t kSpecScrollAnimMs = 500;
 uint8_t specCurrentChannel = 1;
 
 // Per-dwell volatile accumulators
@@ -246,10 +245,9 @@ void spectrogramRecordDwell() {
 #endif
 }
 
-static void specSeedScroll() {
-    lastSpecRowPushMs = millis();
-    const uint32_t rowsPerPush = (specMode == kSpecModeLock) ? 1u : (uint32_t)specTotalChannels();
-    specSweepIntervalMs = rowsPerPush * kSpectrogramDwellMs;
+static void specResetScroll() {
+    lastSpecRowPushMs = 0;
+    specSweepIntervalMs = 0;
 }
 
 void spectrogramPushWaterfallRow() {
@@ -457,9 +455,8 @@ void drawSpectrogram() {
   uint32_t specScrollOffset = 0;
   if (specSweepIntervalMs > kSpectrogramRedrawMs && lastSpecRowPushMs != 0) {
     const uint32_t sinceRow = millis() - lastSpecRowPushMs;
-    const uint32_t animMs = (specSweepIntervalMs < kSpecScrollAnimMs) ? specSweepIntervalMs : kSpecScrollAnimMs;
-    if (sinceRow < animMs) {
-      specScrollOffset = 256 - (uint32_t)(sinceRow * 256UL / animMs);
+    if (sinceRow < specSweepIntervalMs) {
+      specScrollOffset = 256 - (uint32_t)(sinceRow * 256UL / specSweepIntervalMs);
     }
   }
 
@@ -521,7 +518,7 @@ void spectrogramLockToIndex(int idx) {
 
     esp_wifi_set_channel(specCurrentChannel, WIFI_SECOND_CHAN_NONE);
     lastSpecHopMs = millis();
-    specSeedScroll();
+    specResetScroll();
     specResetDwell();
     drawSpectrogram();
 }
@@ -553,7 +550,7 @@ void spectrogramToggleHop() {
   specCurrentChannel = specIndexToChannel(specBandBase());
   esp_wifi_set_channel(specCurrentChannel, WIFI_SECOND_CHAN_NONE);
   lastSpecHopMs = millis();
-  specSeedScroll();
+  specResetScroll();
   specResetDwell();
   drawSpectrogram();
 }
@@ -570,7 +567,7 @@ void spectrogramCycleBand() {
   specCurrentChannel = specIndexToChannel(specBandBase());
   esp_wifi_set_channel(specCurrentChannel, WIFI_SECOND_CHAN_NONE);
   lastSpecHopMs = millis();
-  specSeedScroll();
+  specResetScroll();
   specResetDwell();
   drawSpectrogram();
 }
@@ -582,7 +579,7 @@ void startSpectrogram() {
   specHopIndex = 0;
   specCurrentChannel = (specMode == kSpecModeLock) ? specLockedChannel : specIndexToChannel(specBandBase());
   lastSpecHopMs = millis();
-  specSeedScroll();
+  specResetScroll();
   lastSpecDrawMs = 0;
   lastPeakDecayMs = millis();
   lastSpectrogramCsvOk = false;
@@ -644,7 +641,7 @@ void cycleSpectrogramMode() {
   specCurrentChannel = (specMode == kSpecModeLock) ? specLockedChannel : specIndexToChannel(specBandBase());
   esp_wifi_set_channel(specCurrentChannel, WIFI_SECOND_CHAN_NONE);
   lastSpecHopMs = millis();
-  specSeedScroll();
+  specResetScroll();
   dwellFrames = 0;
   dwellBytes = 0;
   dwellPeakRssi = -127;
@@ -663,7 +660,7 @@ void handleSpectrogramBarTouch(int touchedIdx) {
     specCurrentChannel = specLockedChannel;
     esp_wifi_set_channel(specCurrentChannel, WIFI_SECOND_CHAN_NONE);
     lastSpecHopMs = millis();
-    specSeedScroll();
+    specResetScroll();
     dwellFrames = 0;
     dwellBytes = 0;
     dwellPeakRssi = -127;
