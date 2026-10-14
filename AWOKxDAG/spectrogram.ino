@@ -573,7 +573,7 @@ void spectrogramCycleBand() {
 }
 
 void startSpectrogram() {
-  if (!stopActiveTools()) return;
+  stopActiveTools();
   if (!ensureWifiStation(true)) return;
 
   specHopIndex = 0;
