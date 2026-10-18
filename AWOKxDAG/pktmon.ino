@@ -34,6 +34,7 @@ constexpr int kPktGraphRows = 160;
 constexpr int kPktGraphCenter = 120;
 constexpr uint32_t kPktGraphRowMs = 80;
 constexpr uint32_t kPktGraphRedrawMs = 100;
+constexpr uint32_t kPktFloorSlice = 12;
 static uint8_t pktRowLevel[kPktGraphRows] = {0};
 static int pktRowHead = -1;
 static uint8_t pktKernel[kPktGraphCenter + 1];
@@ -130,7 +131,6 @@ static void pktBuildLut() {
 
 static void pktResetGraph() {
   pktRowHead = -1;
-  pktPeakSlice = 1;
   lastPktSliceTotal = pktTotal;
   pktGraphBaseTotal = pktTotal;
   lastPktRowMs = millis();
@@ -142,11 +142,10 @@ static void pktPushRow() {
   const uint32_t slice = pktTotal - lastPktSliceTotal;
   lastPktSliceTotal = pktTotal;
   if (slice > pktPeakSlice) pktPeakSlice = slice;
-  int lvl = (int)((slice * 100UL) / (pktPeakSlice ? pktPeakSlice : 1));
+  const uint32_t den = pktPeakSlice > kPktFloorSlice ? pktPeakSlice : kPktFloorSlice;
+  int lvl = (int)((slice * 100UL) / den);
   if (lvl < 0) lvl = 0;
   if (lvl > 100) lvl = 100;
-  if (pktPeakSlice > 1) pktPeakSlice = (uint32_t)(pktPeakSlice * 98UL / 100UL);
-  if (pktPeakSlice < 1) pktPeakSlice = 1;
   pktRowHead = (pktRowHead + 1) % kPktGraphRows;
   pktRowLevel[pktRowHead] = (uint8_t)lvl;
   pktSlicePeakRssi = -127;
@@ -276,6 +275,7 @@ void startPacketMon() {
   pktmonStartMs = millis();
   pktmonGraph = false;
   pktSlicePeakRssi = -127;
+  pktPeakSlice = 1;
   pktResetGraph();
   signalMonitorActive = false;
 
