@@ -45,6 +45,16 @@ uint32_t lastSpecRowPushMs = 0;
 uint32_t specHopCycleMs = 0;
 uint8_t specCurrentChannel = 1;
 
+static bool specLineView = false;
+static constexpr int kPmonCols = 224;
+static constexpr uint32_t kPmonColMs = 50;
+static uint8_t pmonCol[kPmonCols] = {0};
+static int pmonHead = -1;
+static uint32_t lastPmonPushMs = 0;
+static uint16_t pmonLastPkts = 0;
+volatile int8_t pmonPeakRssi = -127;
+volatile uint16_t pmonPkts = 0;
+
 // Per-dwell volatile accumulators
 volatile uint16_t dwellFrames = 0;
 volatile uint32_t dwellBytes = 0;
@@ -171,6 +181,8 @@ void IRAM_ATTR spectrogramCallback(void* buf, wifi_promiscuous_pkt_type_t type) 
 
   const int8_t rssi = packet->rx_ctrl.rssi;
   if (rssi > dwellPeakRssi) dwellPeakRssi = rssi;
+  if (rssi > pmonPeakRssi) pmonPeakRssi = rssi;
+  pmonPkts = pmonPkts + 1;
 
   const int noise = packet->rx_ctrl.noise_floor;
   if (noise < 0 && noise > -128) {
@@ -338,6 +350,49 @@ bool exportSpectrogramToSd() {
   return true;
 }
 
+static void specPushPmonColumn() {
+  int8_t pk = pmonPeakRssi;
+  pmonPeakRssi = -127;
+  pmonLastPkts = pmonPkts;
+  pmonPkts = 0;
+  int lvl = 0;
+  if (pk > -120) {
+    lvl = (pk + 95) * 100 / 70;
+    if (lvl < 0) lvl = 0;
+    if (lvl > 100) lvl = 100;
+  }
+  pmonHead = (pmonHead + 1) % kPmonCols;
+  pmonCol[pmonHead] = (uint8_t)lvl;
+}
+
+static void specDrawMonitor(int bx0, int bw, int pTop, int pBot) {
+  const int splitY = pTop + (pBot - pTop) * 2 / 3;
+  const int traceH = splitY - pTop;
+  for (int px = 0; px < bw; ++px) {
+    const int x = bx0 + px;
+    int col = 0;
+    if (pmonHead >= 0) {
+      const int off = bw - 1 - px;
+      const int ci = (pmonHead - off + kPmonCols) % kPmonCols;
+      col = pmonCol[ci];
+    }
+    display.drawFastVLine(x, pTop, traceH, specPaletteLut[0]);
+    int h = col * traceH / 100;
+    if (h < 1 && col > 0) h = 1;
+    if (h > traceH) h = traceH;
+    if (h > 0) display.drawFastVLine(x, splitY - h, h, specPaletteLut[col]);
+    display.drawFastVLine(x, splitY + 2, pBot - (splitY + 2), specPaletteLut[specGammaLut[col]]);
+  }
+  display.drawFastHLine(bx0, splitY, bw, kMuted);
+}
+
+bool spectrogramLineViewActive() { return specLineView; }
+
+void spectrogramToggleView() {
+  specLineView = !specLineView;
+  drawSpectrogram();
+}
+
 void drawSpectrogram() {
   currentView = View::kSpectrogram;
   if (!specLutInit) specInitLuts();
@@ -383,6 +438,20 @@ void drawSpectrogram() {
   drawFooter("Back", lastSpectrogramCsvOk ? "Saved" : "Save");
   return;
 #endif
+
+  if (specLineView) {
+    display.setTextSize(1);
+    display.setTextColor(ILI9341_WHITE, kBackground);
+    display.setCursor(5, 46);
+    display.printf("Ch %-2u (%s)  Pkt:%-4u  Peak: %3d dBm",
+                   specCurrentChannel,
+                   (specCurrentChannel <= 14) ? "2.4G" : "5G",
+                   pmonLastPkts,
+                   curPeak);
+    specDrawMonitor(8, 224, 58, kFooterTop);
+    drawFourButtonFooter("Back", "Ch-", "Ch+", "Band");
+    return;
+  }
 
   const int total = specTotalChannels();
   const int base = specBandBase();
@@ -585,6 +654,14 @@ void startSpectrogram() {
   lastSpectrogramCsvOk = false;
   waterfallHead = 0;
 
+  specLineView = false;
+  pmonHead = -1;
+  lastPmonPushMs = millis();
+  pmonPeakRssi = -127;
+  pmonPkts = 0;
+  pmonLastPkts = 0;
+  for (int i = 0; i < kPmonCols; ++i) pmonCol[i] = 0;
+
   for (int i = 0; i < kMaxSpecBuckets; ++i) {
     specStats[i] = SpectrogramChannelStats();
     specStats[i].channel = specIndexToChannel(i);
@@ -722,6 +799,11 @@ void updateSpectrogram() {
       if (specPeakHold[base + i] > 2) specPeakHold[base + i] -= 2;
       else specPeakHold[base + i] = 0;
     }
+  }
+
+  if (now - lastPmonPushMs >= kPmonColMs) {
+    lastPmonPushMs = now;
+    specPushPmonColumn();
   }
 
   // Redraw

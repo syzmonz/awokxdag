@@ -356,11 +356,15 @@ void handleTouch() {
       }
     } else if (y < 56 && x >= 168) {
       spectrogramCycleBand();
+    } else if (spectrogramLineViewActive()) {
+      spectrogramToggleView();
     } else if (y >= 58 && y <= 120) {
       const int total = specTotalChannels();
       const float span = (total > 1) ? (float)(total - 1) : 1.0f;
       int idx = (int)((float)(x - 8) * span / 223.0f + 0.5f);
       spectrogramLockToIndex(specBandBase() + idx);
+    } else if (y > 120 && y < kFooterTop) {
+      spectrogramToggleView();
     }
     return;
   }
