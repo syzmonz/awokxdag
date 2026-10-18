@@ -23,6 +23,22 @@ uint32_t lastPktmonHopMs = 0;
 uint32_t lastPktmonDrawMs = 0;
 uint32_t pktmonStartMs = 0;
 
+static bool pktmonGraph = false;
+static int pktGraphChIdx = 0;
+static uint32_t lastPktRowMs = 0;
+static uint32_t lastPktSliceTotal = 0;
+static uint32_t pktPeakSlice = 1;
+volatile int8_t pktSlicePeakRssi = -127;
+constexpr int kPktGraphRows = 160;
+constexpr int kPktGraphCenter = 120;
+constexpr uint32_t kPktGraphRowMs = 80;
+constexpr uint32_t kPktGraphRedrawMs = 100;
+static uint8_t pktRowLevel[kPktGraphRows] = {0};
+static int pktRowHead = -1;
+static uint8_t pktKernel[kPktGraphCenter + 1];
+static uint16_t pktPalette[101];
+static bool pktLutReady = false;
+
 // Runs in the Wi-Fi task: tally by frame type and enqueue a copy for the loop.
 void pktmonCallback(void* buf, wifi_promiscuous_pkt_type_t type) {
   // WIFI_PKT_MISC supplies receive metadata only, with no frame payload.
@@ -32,6 +48,8 @@ void pktmonCallback(void* buf, wifi_promiscuous_pkt_type_t type) {
       static_cast<const wifi_promiscuous_pkt_t*>(buf);
   const int length = packet->rx_ctrl.sig_len;
   if (length < 4) return;
+  const int8_t rssi = packet->rx_ctrl.rssi;
+  if (rssi > pktSlicePeakRssi) pktSlicePeakRssi = rssi;
   if (type == WIFI_PKT_MGMT) {
     ++pktMgmt;
   } else if (type == WIFI_PKT_DATA) {
@@ -85,6 +103,117 @@ void writePktmonFrame(const CaptureFrame& frame) {
   ++pktWritten;
 }
 
+static void pktBuildLut() {
+  for (int d = 0; d <= kPktGraphCenter; ++d) {
+    float sharp = expf(-(float)(d * d) / (2.0f * 7.0f * 7.0f));
+    float broad = expf(-(float)d / 42.0f);
+    float v = 0.72f * sharp + 0.34f * broad;
+    if (v > 1.0f) v = 1.0f;
+    pktKernel[d] = (uint8_t)(v * 255.0f);
+  }
+  static const uint8_t stops[6][3] = {
+      {2, 4, 24}, {20, 20, 150}, {120, 20, 170},
+      {235, 30, 40}, {255, 150, 0}, {255, 255, 255}};
+  for (int i = 0; i <= 100; ++i) {
+    float t = (float)i / 100.0f * 5.0f;
+    int s = (int)t;
+    if (s > 4) s = 4;
+    float f = t - s;
+    int r = stops[s][0] + (int)((stops[s + 1][0] - stops[s][0]) * f);
+    int g = stops[s][1] + (int)((stops[s + 1][1] - stops[s][1]) * f);
+    int b = stops[s][2] + (int)((stops[s + 1][2] - stops[s][2]) * f);
+    pktPalette[i] = (uint16_t)(((r & 0xF8) << 8) | ((g & 0xFC) << 3) | (b >> 3));
+  }
+  pktLutReady = true;
+}
+
+static void pktResetGraph() {
+  pktRowHead = -1;
+  pktPeakSlice = 1;
+  lastPktSliceTotal = pktTotal;
+  lastPktRowMs = millis();
+  pktSlicePeakRssi = -127;
+  for (int i = 0; i < kPktGraphRows; ++i) pktRowLevel[i] = 0;
+}
+
+static void pktPushRow() {
+  const uint32_t slice = pktTotal - lastPktSliceTotal;
+  lastPktSliceTotal = pktTotal;
+  if (slice > pktPeakSlice) pktPeakSlice = slice;
+  int lvl = (int)((slice * 100UL) / (pktPeakSlice ? pktPeakSlice : 1));
+  if (lvl < 0) lvl = 0;
+  if (lvl > 100) lvl = 100;
+  if (pktPeakSlice > 1) pktPeakSlice = (uint32_t)(pktPeakSlice * 98UL / 100UL);
+  if (pktPeakSlice < 1) pktPeakSlice = 1;
+  pktRowHead = (pktRowHead + 1) % kPktGraphRows;
+  pktRowLevel[pktRowHead] = (uint8_t)lvl;
+  pktSlicePeakRssi = -127;
+}
+
+void drawPacketMonGraph() {
+  currentView = View::kPacketMon;
+  if (!pktLutReady) pktBuildLut();
+  display.fillScreen(kBackground);
+  const uint8_t gch = kDeauthHopChannels[pktGraphChIdx];
+  drawHeader("PACKET MONITOR", "live graph");
+  display.setTextSize(1);
+  display.setTextColor(ILI9341_WHITE, kBackground);
+  display.setCursor(6, 44);
+  display.printf("Ch:%d %sG   Pkt:%lu   Pk:%ddBm",
+                 gch, bandLabel(gch),
+                 static_cast<unsigned long>(pktTotal),
+                 pktSlicePeakRssi > -127 ? pktSlicePeakRssi : 0);
+
+  const int traceTop = 56, traceBot = 118, wfTop = 126, wfBot = kFooterTop;
+  const int newest = pktRowHead >= 0 ? pktRowLevel[pktRowHead] : 0;
+  display.fillRect(0, traceTop, kScreenWidth, traceBot - traceTop, pktPalette[0]);
+  for (int x = 0; x < kScreenWidth; ++x) {
+    const int d = x >= kPktGraphCenter ? x - kPktGraphCenter : kPktGraphCenter - x;
+    const int mag = newest * pktKernel[d] / 255;
+    const int h = mag * (traceBot - traceTop) / 100;
+    if (h > 0) display.drawFastVLine(x, traceBot - h, h, pktPalette[mag]);
+  }
+  display.drawFastHLine(0, traceBot + 2, kScreenWidth, kMuted);
+
+  const int rows = wfBot - wfTop;
+  for (int row = 0; row < rows; ++row) {
+    const int y = wfTop + row;
+    const int lvl = pktRowHead >= 0
+        ? pktRowLevel[((pktRowHead - row) % kPktGraphRows + kPktGraphRows) % kPktGraphRows]
+        : 0;
+    for (int x = 0; x < kScreenWidth; ++x) {
+      const int d = x >= kPktGraphCenter ? x - kPktGraphCenter : kPktGraphCenter - x;
+      const int mag = lvl * pktKernel[d] / 255;
+      display.drawPixel(x, y, pktPalette[mag]);
+    }
+  }
+  drawFourButtonFooter("Home", "Ch-", "Ch+", "Stats");
+}
+
+bool pktmonGraphActive() { return pktmonGraph; }
+
+void pktmonToggleGraph() {
+  pktmonGraph = !pktmonGraph;
+  if (pktmonGraph) {
+    pktGraphChIdx = pktmonHopIndex;
+    esp_wifi_set_channel(kDeauthHopChannels[pktGraphChIdx], WIFI_SECOND_CHAN_NONE);
+    pktResetGraph();
+    lastPktmonDrawMs = 0;
+    drawPacketMonGraph();
+  } else {
+    lastPktmonHopMs = millis();
+    lastPktmonDrawMs = 0;
+    drawPacketMon();
+  }
+}
+
+void pktmonGraphStep(int dir) {
+  pktGraphChIdx = (pktGraphChIdx + dir + kDeauthHopChannelCount) % kDeauthHopChannelCount;
+  esp_wifi_set_channel(kDeauthHopChannels[pktGraphChIdx], WIFI_SECOND_CHAN_NONE);
+  pktResetGraph();
+  drawPacketMonGraph();
+}
+
 void drawPacketMon() {
   currentView = View::kPacketMon;
   display.fillScreen(kBackground);
@@ -128,7 +257,7 @@ void drawPacketMon() {
   display.print("Hops 2.4/5 GHz; drops payload if the");
   display.setCursor(6, 228);
   display.print("SD write cannot keep up (counts stay).");
-  drawFooter("Home", "Home");
+  drawFooter("Home", "Graph");
 }
 
 void startPacketMon() {
@@ -143,6 +272,9 @@ void startPacketMon() {
   lastPktmonHopMs = millis();
   lastPktmonDrawMs = 0;
   pktmonStartMs = millis();
+  pktmonGraph = false;
+  pktSlicePeakRssi = -127;
+  pktResetGraph();
   signalMonitorActive = false;
 
   WiFi.disconnect(true, false);
@@ -183,6 +315,18 @@ void updatePacketMon() {
     captureTail = (captureTail + 1) % kCaptureQueueSlots;
   }
   const uint32_t now = millis();
+  if (pktmonGraph) {
+    if (now - lastPktRowMs >= kPktGraphRowMs) {
+      lastPktRowMs = now;
+      pktPushRow();
+    }
+    if (now - lastPktmonDrawMs >= kPktGraphRedrawMs) {
+      lastPktmonDrawMs = now;
+      if (pktmonFileOpen) pktmonFile.flush();
+      drawPacketMonGraph();
+    }
+    return;
+  }
   if (now - lastPktmonHopMs >= kPktmonHopIntervalMs) {
     lastPktmonHopMs = now;
     pktmonHopIndex = (pktmonHopIndex + 1) % kDeauthHopChannelCount;
