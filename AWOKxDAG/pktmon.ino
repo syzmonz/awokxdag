@@ -28,6 +28,7 @@ static int pktGraphChIdx = 0;
 static uint32_t lastPktRowMs = 0;
 static uint32_t lastPktSliceTotal = 0;
 static uint32_t pktPeakSlice = 1;
+static uint32_t pktGraphBaseTotal = 0;
 volatile int8_t pktSlicePeakRssi = -127;
 constexpr int kPktGraphRows = 160;
 constexpr int kPktGraphCenter = 120;
@@ -105,15 +106,15 @@ void writePktmonFrame(const CaptureFrame& frame) {
 
 static void pktBuildLut() {
   for (int d = 0; d <= kPktGraphCenter; ++d) {
-    float sharp = expf(-(float)(d * d) / (2.0f * 7.0f * 7.0f));
-    float broad = expf(-(float)d / 42.0f);
-    float v = 0.72f * sharp + 0.34f * broad;
+    float sharp = expf(-(float)(d * d) / (2.0f * 4.5f * 4.5f));
+    float tail = expf(-(float)d / 22.0f);
+    float v = 0.90f * sharp + 0.18f * tail;
     if (v > 1.0f) v = 1.0f;
     pktKernel[d] = (uint8_t)(v * 255.0f);
   }
   static const uint8_t stops[6][3] = {
-      {2, 4, 24}, {20, 20, 150}, {120, 20, 170},
-      {235, 30, 40}, {255, 150, 0}, {255, 255, 255}};
+      {2, 4, 24}, {20, 30, 150}, {40, 40, 210},
+      {110, 30, 190}, {230, 40, 50}, {255, 255, 255}};
   for (int i = 0; i <= 100; ++i) {
     float t = (float)i / 100.0f * 5.0f;
     int s = (int)t;
@@ -131,6 +132,7 @@ static void pktResetGraph() {
   pktRowHead = -1;
   pktPeakSlice = 1;
   lastPktSliceTotal = pktTotal;
+  pktGraphBaseTotal = pktTotal;
   lastPktRowMs = millis();
   pktSlicePeakRssi = -127;
   for (int i = 0; i < kPktGraphRows; ++i) pktRowLevel[i] = 0;
@@ -161,7 +163,7 @@ void drawPacketMonGraph() {
   display.setCursor(6, 44);
   display.printf("Ch:%d %sG   Pkt:%lu   Pk:%ddBm",
                  gch, bandLabel(gch),
-                 static_cast<unsigned long>(pktTotal),
+                 static_cast<unsigned long>(pktTotal - pktGraphBaseTotal),
                  pktSlicePeakRssi > -127 ? pktSlicePeakRssi : 0);
 
   const int traceTop = 56, traceBot = 118, wfTop = 126, wfBot = kFooterTop;
