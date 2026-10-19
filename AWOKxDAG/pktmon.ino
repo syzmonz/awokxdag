@@ -33,7 +33,7 @@ constexpr int kPktGraphRows = 160;
 constexpr int kPktGraphCenter = 120;
 constexpr uint32_t kPktGraphRowMs = 80;
 constexpr uint32_t kPktGraphRedrawMs = 100;
-constexpr float kPktLogGain = 15.0f;
+constexpr float kPktRateGain = 6.0f;
 constexpr int kPktFftN = 128;
 constexpr int kPktBins = 64;
 constexpr uint32_t kPktSubBinUs = (kPktGraphRowMs * 1000UL) / kPktFftN;
@@ -184,17 +184,33 @@ static void pktResetGraph() {
 }
 
 static void pktPushRow() {
+  float cum = 0.0f;
   for (int i = 0; i < kPktFftN; ++i) {
-    pktFftRe[i] = (float)pktSubBin[i] * pktHamming[i];
-    pktFftIm[i] = 0.0f;
+    cum += (float)pktSubBin[i];
+    pktFftRe[i] = cum;
     pktSubBin[i] = 0;
   }
   pktRowStartUs = micros();
+  const uint32_t slice = (uint32_t)cum;
+  float mean = 0.0f;
+  for (int i = 0; i < kPktFftN; ++i) mean += pktFftRe[i];
+  mean /= kPktFftN;
+  for (int i = 0; i < kPktFftN; ++i) {
+    pktFftRe[i] = (pktFftRe[i] - mean) * pktHamming[i];
+    pktFftIm[i] = 0.0f;
+  }
   pktFft();
+  float mag[kPktBins];
+  float mx = 1e-6f;
+  for (int bin = 0; bin < kPktBins; ++bin) {
+    mag[bin] = sqrtf(pktFftRe[bin] * pktFftRe[bin] + pktFftIm[bin] * pktFftIm[bin]);
+    if (mag[bin] > mx) mx = mag[bin];
+  }
+  float bright = kPktRateGain * (float)slice;
+  if (bright > 100.0f) bright = 100.0f;
   pktRowHead = (pktRowHead + 1) % kPktGraphRows;
   for (int bin = 0; bin < kPktBins; ++bin) {
-    float mag = sqrtf(pktFftRe[bin] * pktFftRe[bin] + pktFftIm[bin] * pktFftIm[bin]);
-    int lvl = (int)(kPktLogGain * log2f(1.0f + mag) + 0.5f);
+    int lvl = (int)(bright * (mag[bin] / mx) + 0.5f);
     if (lvl < 0) lvl = 0;
     if (lvl > 100) lvl = 100;
     pktRowSpec[pktRowHead][bin] = (uint8_t)lvl;
@@ -370,6 +386,7 @@ void updatePacketMon() {
   if (pktmonGraph) {
     if (now - lastPktRowMs >= kPktGraphRowMs) {
       lastPktRowMs = now;
+      esp_wifi_set_channel(kDeauthHopChannels[pktGraphChIdx], WIFI_SECOND_CHAN_NONE);
       pktPushRow();
     }
     if (now - lastPktmonDrawMs >= kPktGraphRedrawMs) {
