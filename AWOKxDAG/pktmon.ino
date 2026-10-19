@@ -118,18 +118,14 @@ void writePktmonFrame(const CaptureFrame& frame) {
 }
 
 static void pktBuildLut() {
-  static const uint8_t stops[6][3] = {
-      {0, 0, 0}, {0, 0, 170}, {90, 10, 180},
-      {230, 25, 25}, {255, 170, 0}, {255, 255, 255}};
-  for (int i = 0; i <= 100; ++i) {
-    float t = (float)i / 100.0f * 5.0f;
-    int s = (int)t;
-    if (s > 4) s = 4;
-    float f = t - s;
-    int r = stops[s][0] + (int)((stops[s + 1][0] - stops[s][0]) * f);
-    int g = stops[s][1] + (int)((stops[s + 1][1] - stops[s][1]) * f);
-    int b = stops[s][2] + (int)((stops[s + 1][2] - stops[s][2]) * f);
-    pktPalette[i] = (uint16_t)(((r & 0xF8) << 8) | ((g & 0xFC) << 3) | (b >> 3));
+  for (int lv = 0; lv <= 100; ++lv) {
+    int i = lv * 127 / 100;
+    int r, g, b;
+    if (i < 32) { r = i / 2; g = 0; b = i; }
+    else if (i < 64) { r = i / 2; g = 0; b = 63 - i; }
+    else if (i < 96) { r = 31; g = (i - 64) * 2; b = 0; }
+    else { r = 31; g = 63; b = i - 96; }
+    pktPalette[lv] = (uint16_t)((r << 11) | (g << 5) | b);
   }
   for (int i = 0; i < kPktFftN; ++i)
     pktHamming[i] = 0.54f - 0.46f * cosf(2.0f * 3.14159265f * i / (kPktFftN - 1));
@@ -210,9 +206,11 @@ static void pktPushRow() {
   }
   float bright = kPktRateGain * (float)slice;
   if (bright > 100.0f) bright = 100.0f;
+  const float lmx = log2f(1.0f + mx);
   pktRowHead = (pktRowHead + 1) % kPktGraphRows;
   for (int bin = 0; bin < kPktBins; ++bin) {
-    int lvl = (int)(bright * powf(mag[bin] / mx, 1.6f) + 0.5f);
+    const float shape = lmx > 0.0f ? log2f(1.0f + mag[bin]) / lmx : 0.0f;
+    int lvl = (int)(bright * shape + 0.5f);
     if (lvl < 0) lvl = 0;
     if (lvl > 100) lvl = 100;
     pktRowSpec[pktRowHead][bin] = (uint8_t)lvl;
