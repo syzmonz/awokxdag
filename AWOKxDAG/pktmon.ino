@@ -33,7 +33,8 @@ constexpr int kPktGraphRows = 160;
 constexpr int kPktGraphCenter = 120;
 constexpr uint32_t kPktGraphRowMs = 80;
 constexpr uint32_t kPktGraphRedrawMs = 100;
-constexpr float kPktRateGain = 6.0f;
+constexpr float kPktRateGain = 8.0f;
+static int8_t pktDispRssi = -127;
 constexpr int kPktFftN = 128;
 constexpr int kPktBins = 64;
 constexpr uint32_t kPktSubBinUs = (kPktGraphRowMs * 1000UL) / kPktFftN;
@@ -118,8 +119,8 @@ void writePktmonFrame(const CaptureFrame& frame) {
 
 static void pktBuildLut() {
   static const uint8_t stops[6][3] = {
-      {2, 4, 24}, {20, 30, 150}, {40, 40, 210},
-      {110, 30, 190}, {230, 40, 50}, {255, 255, 255}};
+      {0, 0, 0}, {0, 0, 170}, {90, 10, 180},
+      {230, 25, 25}, {255, 170, 0}, {255, 255, 255}};
   for (int i = 0; i <= 100; ++i) {
     float t = (float)i / 100.0f * 5.0f;
     int s = (int)t;
@@ -178,6 +179,7 @@ static void pktResetGraph() {
   lastPktRowMs = millis();
   pktRowStartUs = micros();
   pktSlicePeakRssi = -127;
+  pktDispRssi = -127;
   for (int i = 0; i < kPktFftN; ++i) pktSubBin[i] = 0;
   for (int r = 0; r < kPktGraphRows; ++r)
     for (int b = 0; b < kPktBins; ++b) pktRowSpec[r][b] = 0;
@@ -210,11 +212,12 @@ static void pktPushRow() {
   if (bright > 100.0f) bright = 100.0f;
   pktRowHead = (pktRowHead + 1) % kPktGraphRows;
   for (int bin = 0; bin < kPktBins; ++bin) {
-    int lvl = (int)(bright * (mag[bin] / mx) + 0.5f);
+    int lvl = (int)(bright * powf(mag[bin] / mx, 1.6f) + 0.5f);
     if (lvl < 0) lvl = 0;
     if (lvl > 100) lvl = 100;
     pktRowSpec[pktRowHead][bin] = (uint8_t)lvl;
   }
+  if (pktSlicePeakRssi > -127) pktDispRssi = pktSlicePeakRssi;
   pktSlicePeakRssi = -127;
 }
 
@@ -230,7 +233,7 @@ void drawPacketMonGraph() {
   display.printf("Ch:%d %sG   Pkt:%lu   Pk:%ddBm",
                  gch, bandLabel(gch),
                  static_cast<unsigned long>(pktTotal - pktGraphBaseTotal),
-                 pktSlicePeakRssi > -127 ? pktSlicePeakRssi : 0);
+                 pktDispRssi > -127 ? pktDispRssi : 0);
 
   const int traceTop = 56, traceBot = 118, wfTop = 126, wfBot = kFooterTop;
   display.fillRect(0, traceTop, kScreenWidth, traceBot - traceTop, pktPalette[0]);
