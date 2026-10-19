@@ -34,9 +34,17 @@ constexpr int kPktGraphCenter = 120;
 constexpr uint32_t kPktGraphRowMs = 80;
 constexpr uint32_t kPktGraphRedrawMs = 100;
 constexpr float kPktLogGain = 15.0f;
-static uint8_t pktRowLevel[kPktGraphRows] = {0};
+constexpr int kPktFftN = 128;
+constexpr int kPktBins = 64;
+constexpr uint32_t kPktSubBinUs = (kPktGraphRowMs * 1000UL) / kPktFftN;
+static volatile uint16_t pktSubBin[kPktFftN] = {0};
+static volatile uint32_t pktRowStartUs = 0;
+static uint8_t pktRowSpec[kPktGraphRows][kPktBins] = {{0}};
 static int pktRowHead = -1;
-static uint8_t pktKernel[kPktGraphCenter + 1];
+static float pktFftRe[kPktFftN];
+static float pktFftIm[kPktFftN];
+static float pktHamming[kPktFftN];
+static uint8_t pktXtoBin[kScreenWidth];
 static uint16_t pktPalette[101];
 static bool pktLutReady = false;
 
@@ -51,6 +59,10 @@ void pktmonCallback(void* buf, wifi_promiscuous_pkt_type_t type) {
   if (length < 4) return;
   const int8_t rssi = packet->rx_ctrl.rssi;
   if (rssi > pktSlicePeakRssi) pktSlicePeakRssi = rssi;
+  if (pktmonGraph) {
+    const uint32_t idx = (micros() - pktRowStartUs) / kPktSubBinUs;
+    if (idx < (uint32_t)kPktFftN) pktSubBin[idx]++;
+  }
   if (type == WIFI_PKT_MGMT) {
     ++pktMgmt;
   } else if (type == WIFI_PKT_DATA) {
@@ -105,13 +117,6 @@ void writePktmonFrame(const CaptureFrame& frame) {
 }
 
 static void pktBuildLut() {
-  for (int d = 0; d <= kPktGraphCenter; ++d) {
-    float sharp = expf(-(float)(d * d) / (2.0f * 4.5f * 4.5f));
-    float tail = expf(-(float)d / 22.0f);
-    float v = 0.90f * sharp + 0.18f * tail;
-    if (v > 1.0f) v = 1.0f;
-    pktKernel[d] = (uint8_t)(v * 255.0f);
-  }
   static const uint8_t stops[6][3] = {
       {2, 4, 24}, {20, 30, 150}, {40, 40, 210},
       {110, 30, 190}, {230, 40, 50}, {255, 255, 255}};
@@ -125,7 +130,45 @@ static void pktBuildLut() {
     int b = stops[s][2] + (int)((stops[s + 1][2] - stops[s][2]) * f);
     pktPalette[i] = (uint16_t)(((r & 0xF8) << 8) | ((g & 0xFC) << 3) | (b >> 3));
   }
+  for (int i = 0; i < kPktFftN; ++i)
+    pktHamming[i] = 0.54f - 0.46f * cosf(2.0f * 3.14159265f * i / (kPktFftN - 1));
+  for (int x = 0; x < kScreenWidth; ++x) {
+    int d = x >= kPktGraphCenter ? x - kPktGraphCenter : kPktGraphCenter - x;
+    int bin = d * (kPktBins - 1) / kPktGraphCenter;
+    if (bin < 0) bin = 0;
+    if (bin >= kPktBins) bin = kPktBins - 1;
+    pktXtoBin[x] = (uint8_t)bin;
+  }
   pktLutReady = true;
+}
+
+static void pktFft() {
+  const int n = kPktFftN;
+  int j = 0;
+  for (int i = 1; i < n; ++i) {
+    int bit = n >> 1;
+    for (; j & bit; bit >>= 1) j ^= bit;
+    j ^= bit;
+    if (i < j) {
+      float tr = pktFftRe[i]; pktFftRe[i] = pktFftRe[j]; pktFftRe[j] = tr;
+      float ti = pktFftIm[i]; pktFftIm[i] = pktFftIm[j]; pktFftIm[j] = ti;
+    }
+  }
+  for (int len = 2; len <= n; len <<= 1) {
+    float ang = -2.0f * 3.14159265f / len;
+    float wr = cosf(ang), wi = sinf(ang);
+    for (int i = 0; i < n; i += len) {
+      float cr = 1.0f, ci = 0.0f;
+      for (int k = 0; k < len / 2; ++k) {
+        int a = i + k, b = a + len / 2;
+        float tr = pktFftRe[b] * cr - pktFftIm[b] * ci;
+        float ti = pktFftRe[b] * ci + pktFftIm[b] * cr;
+        pktFftRe[b] = pktFftRe[a] - tr; pktFftIm[b] = pktFftIm[a] - ti;
+        pktFftRe[a] += tr; pktFftIm[a] += ti;
+        float ncr = cr * wr - ci * wi; ci = cr * wi + ci * wr; cr = ncr;
+      }
+    }
+  }
 }
 
 static void pktResetGraph() {
@@ -133,18 +176,29 @@ static void pktResetGraph() {
   lastPktSliceTotal = pktTotal;
   pktGraphBaseTotal = pktTotal;
   lastPktRowMs = millis();
+  pktRowStartUs = micros();
   pktSlicePeakRssi = -127;
-  for (int i = 0; i < kPktGraphRows; ++i) pktRowLevel[i] = 0;
+  for (int i = 0; i < kPktFftN; ++i) pktSubBin[i] = 0;
+  for (int r = 0; r < kPktGraphRows; ++r)
+    for (int b = 0; b < kPktBins; ++b) pktRowSpec[r][b] = 0;
 }
 
 static void pktPushRow() {
-  const uint32_t slice = pktTotal - lastPktSliceTotal;
-  lastPktSliceTotal = pktTotal;
-  int lvl = (int)(kPktLogGain * log2f(1.0f + (float)slice) + 0.5f);
-  if (lvl < 0) lvl = 0;
-  if (lvl > 100) lvl = 100;
+  for (int i = 0; i < kPktFftN; ++i) {
+    pktFftRe[i] = (float)pktSubBin[i] * pktHamming[i];
+    pktFftIm[i] = 0.0f;
+    pktSubBin[i] = 0;
+  }
+  pktRowStartUs = micros();
+  pktFft();
   pktRowHead = (pktRowHead + 1) % kPktGraphRows;
-  pktRowLevel[pktRowHead] = (uint8_t)lvl;
+  for (int bin = 0; bin < kPktBins; ++bin) {
+    float mag = sqrtf(pktFftRe[bin] * pktFftRe[bin] + pktFftIm[bin] * pktFftIm[bin]);
+    int lvl = (int)(kPktLogGain * log2f(1.0f + mag) + 0.5f);
+    if (lvl < 0) lvl = 0;
+    if (lvl > 100) lvl = 100;
+    pktRowSpec[pktRowHead][bin] = (uint8_t)lvl;
+  }
   pktSlicePeakRssi = -127;
 }
 
@@ -163,26 +217,26 @@ void drawPacketMonGraph() {
                  pktSlicePeakRssi > -127 ? pktSlicePeakRssi : 0);
 
   const int traceTop = 56, traceBot = 118, wfTop = 126, wfBot = kFooterTop;
-  const int newest = pktRowHead >= 0 ? pktRowLevel[pktRowHead] : 0;
   display.fillRect(0, traceTop, kScreenWidth, traceBot - traceTop, pktPalette[0]);
-  for (int x = 0; x < kScreenWidth; ++x) {
-    const int d = x >= kPktGraphCenter ? x - kPktGraphCenter : kPktGraphCenter - x;
-    const int mag = newest * pktKernel[d] / 255;
-    const int h = mag * (traceBot - traceTop) / 100;
-    if (h > 0) display.drawFastVLine(x, traceBot - h, h, pktPalette[mag]);
+  if (pktRowHead >= 0) {
+    const uint8_t* cur = pktRowSpec[pktRowHead];
+    for (int x = 0; x < kScreenWidth; ++x) {
+      const int v = cur[pktXtoBin[x]];
+      const int h = v * (traceBot - traceTop) / 100;
+      if (h > 0) display.drawFastVLine(x, traceBot - h, h, pktPalette[v]);
+    }
   }
   display.drawFastHLine(0, traceBot + 2, kScreenWidth, kMuted);
 
-  const int rows = wfBot - wfTop;
-  for (int row = 0; row < rows; ++row) {
-    const int y = wfTop + row;
-    const int lvl = pktRowHead >= 0
-        ? pktRowLevel[((pktRowHead - row) % kPktGraphRows + kPktGraphRows) % kPktGraphRows]
-        : 0;
-    for (int x = 0; x < kScreenWidth; ++x) {
-      const int d = x >= kPktGraphCenter ? x - kPktGraphCenter : kPktGraphCenter - x;
-      const int mag = lvl * pktKernel[d] / 255;
-      display.drawPixel(x, y, pktPalette[mag]);
+  if (pktRowHead >= 0) {
+    const int rows = wfBot - wfTop;
+    for (int row = 0; row < rows; ++row) {
+      const int y = wfTop + row;
+      const uint8_t* spec =
+          pktRowSpec[((pktRowHead - row) % kPktGraphRows + kPktGraphRows) % kPktGraphRows];
+      for (int x = 0; x < kScreenWidth; ++x) {
+        display.drawPixel(x, y, pktPalette[spec[pktXtoBin[x]]]);
+      }
     }
   }
   drawFourButtonFooter("Home", "Ch-", "Ch+", "Stats");
