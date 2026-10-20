@@ -1,30 +1,67 @@
 // AWOKxDAG — touch + serial input dispatch (compiled as part of the sketch; see awok_common.h)
 
+#ifdef AWOK_MINI_DISPLAY
+#ifdef AWOK_CARDPUTER_V11
+bool cardputerSuppressCenter = false;
+#endif
+bool miniButtonDown(int pin) {
+#ifdef AWOK_CARDPUTER_V11
+  auto& keyboard = M5Cardputer.Keyboard;
+  if (!keyboard.keysState().enter) cardputerSuppressCenter = false;
+  if (currentView == View::kNetworkEdit && !keyboard.keysState().fn) return false;
+  if (pin == AwokPins::kButtonLeft)
+    return keyboard.isKeyPressed(',') || keyboard.isKeyPressed('<');
+  if (pin == AwokPins::kButtonRight)
+    return keyboard.isKeyPressed('/') || keyboard.isKeyPressed('?');
+  if (pin == AwokPins::kButtonUp)
+    return keyboard.isKeyPressed(';') || keyboard.isKeyPressed(':');
+  if (pin == AwokPins::kButtonDown)
+    return keyboard.isKeyPressed('.') || keyboard.isKeyPressed('>');
+  if (pin == AwokPins::kButtonCenter)
+    return currentView != View::kNetworkEdit && keyboard.keysState().enter &&
+           !cardputerSuppressCenter;
+  return false;
+#else
+  return digitalRead(pin) == LOW;
+#endif
+}
+#endif
+
 bool readTouch(int& screenX, int& screenY) {
 #ifdef AWOK_MINI_DISPLAY
-  return digitalRead(AwokPins::kButtonCenter) == LOW &&
+  return miniButtonDown(AwokPins::kButtonCenter) &&
          display.selection(screenX, screenY);
 #else
   if (!touch.touched()) return false;
   TS_Point point = touch.getPoint();
   if (point.z < AwokTouchCalibration::kPressureMin) return false;
+#ifdef AWOK_CYD_NATIVE_320X240
+  // Match the 2.8-inch boards' portrait menu turn on the 320x240 panel.
+  screenX = constrain(map(point.y, AwokTouchCalibration::kYMin,
+                          AwokTouchCalibration::kYMax, 0, kScreenWidth - 1),
+                      0, kScreenWidth - 1);
+  screenY = constrain(map(point.x, AwokTouchCalibration::kXMin,
+                          AwokTouchCalibration::kXMax, kScreenHeight - 1, 0),
+                      0, kScreenHeight - 1);
+#else
   screenX = constrain(map(point.x, AwokTouchCalibration::kXMin,
                           AwokTouchCalibration::kXMax, 0, kScreenWidth - 1),
                       0, kScreenWidth - 1);
   screenY = constrain(map(point.y, AwokTouchCalibration::kYMin,
                           AwokTouchCalibration::kYMax, 0, kScreenHeight - 1),
                       0, kScreenHeight - 1);
+#endif
   return true;
 #endif
 }
 
 #ifdef AWOK_MINI_DISPLAY
 bool miniAnyButtonDown() {
-  return digitalRead(AwokPins::kButtonLeft) == LOW ||
-         digitalRead(AwokPins::kButtonCenter) == LOW ||
-         digitalRead(AwokPins::kButtonUp) == LOW ||
-         digitalRead(AwokPins::kButtonRight) == LOW ||
-         digitalRead(AwokPins::kButtonDown) == LOW;
+  return miniButtonDown(AwokPins::kButtonLeft) ||
+         miniButtonDown(AwokPins::kButtonCenter) ||
+         miniButtonDown(AwokPins::kButtonUp) ||
+         miniButtonDown(AwokPins::kButtonRight) ||
+         miniButtonDown(AwokPins::kButtonDown);
 }
 
 void updateMiniJoystick() {
@@ -36,13 +73,13 @@ void updateMiniJoystick() {
     return;
   }
   if (currentView == View::kScreenTest) {
-    if (digitalRead(AwokPins::kButtonLeft) == LOW &&
+    if (miniButtonDown(AwokPins::kButtonLeft) &&
         static_cast<int32_t>(now - nextMove) >= 0) {
       nextMove = now + 300;
       noteActivity();
       stopScreenTest();
-    } else if ((digitalRead(AwokPins::kButtonRight) == LOW ||
-                digitalRead(AwokPins::kButtonDown) == LOW) &&
+    } else if ((miniButtonDown(AwokPins::kButtonRight) ||
+                miniButtonDown(AwokPins::kButtonDown)) &&
                static_cast<int32_t>(now - nextMove) >= 0) {
       nextMove = now + 300;
       noteActivity();
@@ -51,11 +88,11 @@ void updateMiniJoystick() {
     return;
   }
   // Holding center never moves selection into another control.
-  if (digitalRead(AwokPins::kButtonCenter) == LOW) return;
-  const int direction = digitalRead(AwokPins::kButtonLeft) == LOW ? -2 :
-      digitalRead(AwokPins::kButtonRight) == LOW ? 2 :
-      digitalRead(AwokPins::kButtonUp) == LOW ? -1 :
-      digitalRead(AwokPins::kButtonDown) == LOW ? 1 : 0;
+  if (miniButtonDown(AwokPins::kButtonCenter)) return;
+  const int direction = miniButtonDown(AwokPins::kButtonLeft) ? -2 :
+      miniButtonDown(AwokPins::kButtonRight) ? 2 :
+      miniButtonDown(AwokPins::kButtonUp) ? -1 :
+      miniButtonDown(AwokPins::kButtonDown) ? 1 : 0;
   if (!direction) { lastDirection = 0; return; }
   const bool first = direction != lastDirection;
   if (first || static_cast<int32_t>(now - nextMove) >= 0) {
@@ -79,13 +116,15 @@ bool consumeTouchPress(bool pressed, uint32_t now) {
   return true;
 }
 
+void dispatchTouch(int x, int y);
+
 void handleTouch() {
   if (scanInProgress) return;
   int x = 0;
   int y = 0;
 #ifdef AWOK_MINI_DISPLAY
   const bool pressed = currentView == View::kScreenTest
-                           ? digitalRead(AwokPins::kButtonCenter) == LOW
+                           ? miniButtonDown(AwokPins::kButtonCenter)
                            : readTouch(x, y);
   if (currentView == View::kScreenTest) {
     x = 120;
@@ -100,6 +139,10 @@ void handleTouch() {
   }
   if (!consumeTouchPress(pressed, millis())) return;
   noteActivity();
+  dispatchTouch(x, y);
+}
+
+void dispatchTouch(int x, int y) {
   // Keyboard coordinates can reveal password characters even when masked.
   if (currentView != View::kNetworkEdit) Serial.printf("[touch] x=%d y=%d\n", x, y);
   if (currentView == View::kScreenTest) {
@@ -322,7 +365,9 @@ void handleTouch() {
     return;
   }
   if (currentView == View::kWpsScan) {
-    if (reconResultFooterHit(x, wpsCount, false) == 0) { stopWpsScan(); drawReconMenu(); }
+    const int a = reconResultFooterHit(x, wpsCount, false);
+    if (a == 0) { stopWpsScan(); drawReconMenu(); }
+    else if (a == 4) { stopWpsScan(); drawHome(); }
     else drawWpsScan();
     return;
   }
@@ -332,7 +377,9 @@ void handleTouch() {
     return;
   }
   if (currentView == View::kHiddenReveal) {
-    if (reconResultFooterHit(x, hiddenCount, false) == 0) { stopHiddenReveal(); drawReconMenu(); }
+    const int a = reconResultFooterHit(x, hiddenCount, false);
+    if (a == 0) { stopHiddenReveal(); drawReconMenu(); }
+    else if (a == 4) { stopHiddenReveal(); drawHome(); }
     else drawHiddenReveal();
     return;
   }
@@ -582,6 +629,12 @@ void handleTouch() {
     return;
   }
   if (currentView == View::kProbeLure) {
+    if (lureSsid.length() == 0) {  // no-target screen: Back -> Attacks, Home
+      stopProbeLure();
+      if (x < kScreenWidth / 2) drawAttacksMenu();
+      else drawHome();
+      return;
+    }
     if (x < kScreenWidth / 2) {
       stopProbeLure();
       drawAttacksMenu();
@@ -686,10 +739,21 @@ void handleTouch() {
     if (x < kScreenWidth / 2) {
       drawBleResults();
     } else {
+#ifdef AWOK_GATT_AUDIT
+      if (selectedBle.connectable) startGattAudit();
+      else scanBle();
+#else
       scanBle();
+#endif
     }
     return;
   }
+#ifdef AWOK_GATT_AUDIT
+  if (currentView == View::kBleGattAudit) {
+    handleGattTouch(x, y);
+    return;
+  }
+#endif
   if (currentView == View::kWifiAudit) {
     if (x < 48) {
       if (auditReturnView == View::kSaved) {
@@ -733,7 +797,70 @@ void handleTouch() {
   }
 }
 
+#ifdef AWOK_CARDPUTER_V11
+// The v1.1 keyboard reports the top-left ~ key as backtick or tilde.
+// Dispatch the screen's own Back/Cancel/Stop control so nested menus and
+// running tools keep their existing cleanup and return behavior.
+void handleCardputerEscape() {
+  static bool wasDown = false;
+  const auto& keys = M5Cardputer.Keyboard.keysState();
+  const bool down = M5Cardputer.Keyboard.isKeyPressed('`') ||
+                    M5Cardputer.Keyboard.isKeyPressed('~');
+  const bool pressed = down && !wasDown;
+  wasDown = down;
+  if (!pressed) return;
+  if (backlightDimmed) { noteActivity(); return; }
+  noteActivity();
+  if (scanInProgress) return;
+  if (currentView == View::kNetworkEdit) {
+    // In text entry the plain key keeps typing punctuation; Fn invokes Esc.
+    if (keys.fn) cancelNetworkEditor();
+    return;
+  }
+  if (currentView == View::kScreenTest) {
+    stopScreenTest();
+    return;
+  }
+  if (currentView == View::kHome && !homeOverlay) {
+    if (homePage > 0) {
+      --homePage;
+      drawHome();
+    }
+    return;
+  }
+  // Network Tools shows a Back button while a job runs, but disables it
+  // until the job is cancelled. Use the visible Cancel/Stop action first.
+  static const char* const actions[] = {
+      "Back", "Cancel", "Leave", "Groups", "Stop", "Home"};
+  static const char* const runningActions[] = {
+      "Cancel", "Stop", "Back", "Leave", "Groups", "Home"};
+  const char* const* preferred = networkToolsOpen() &&
+                                 cardputerNetworkJobActive()
+                                     ? runningActions : actions;
+  for (int actionIndex = 0; actionIndex < 6; ++actionIndex) {
+    const char* action = preferred[actionIndex];
+    const size_t length = strlen(action);
+    for (int i = 0; i < display.layout.count; ++i) {
+      const MiniLayout::Item& item = display.layout.items[i];
+      if (!item.action() || strncmp(item.label, action, length) != 0) continue;
+      const char next = item.label[length];
+      if (next != '\0' && next != ' ' && next != '/') continue;
+      dispatchTouch(item.targetX, item.targetY);
+      return;
+    }
+  }
+  if (currentView == View::kHome && homeOverlay) {
+    homeOverlay = false;
+    homePage = 0;
+    drawHome();
+  }
+}
+#endif
+
 bool toolBlocksSerialShortcuts() {
+#ifdef AWOK_GATT_AUDIT
+  if (gattAuditActive()) return true;
+#endif
   return deauthAttackActive || deauthMonitorActive || handshakeCaptureActive ||
          clientSnifferActive || beaconFloodActive || evilPortalActive ||
          wardriveActive || pktmonActive || wpsScanActive || rogueWatchActive ||
@@ -746,7 +873,10 @@ bool toolBlocksSerialShortcuts() {
          linkState == kLinkDiscovering || linkState == kLinkAwaitConfirm;
 }
 
-void stopActiveTools() {
+bool stopActiveTools() {
+#ifdef AWOK_GATT_AUDIT
+  if (gattAuditActive() && !closeGattAudit()) return false;
+#endif
   stopWifiScanContinuous();
   if (deauthAttackActive) stopDeauthAttack();
   if (deauthMonitorActive) stopDeauthMonitor();
@@ -781,6 +911,7 @@ void stopActiveTools() {
   if (linkState == kLinkDiscovering || linkState == kLinkAwaitConfirm) {
     linkCancelPairing();
   }
+  return true;
 }
 
 void handleSerial() {
@@ -805,8 +936,10 @@ void handleSerial() {
   const char command = static_cast<char>(tolower(Serial.read()));
   if (toolBlocksSerialShortcuts()) {
     if (command == 'h') {
-      stopActiveTools();
-      drawHome();
+      if (stopActiveTools()) drawHome();
+#ifdef AWOK_GATT_AUDIT
+      else drawGattAudit();
+#endif
     }
     return;
   }

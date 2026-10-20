@@ -151,6 +151,12 @@ void applyGpsBaud(unsigned long baud, bool persist) {
   gpsCurrentBaud = kGpsBaudOptions[gpsBaudIndex];
   deviceSettings.gpsBaud = gpsCurrentBaud;
   if (gpsStarted) gpsSerial.end();
+  if (AwokPins::kGpsRx < 0 || AwokPins::kGpsTx < 0) {
+    gpsStarted = false;
+    Serial.println("[gps] no GPS UART on this board");
+    if (persist) saveDeviceSettings();
+    return;
+  }
   gpsSerial.begin(gpsCurrentBaud, SERIAL_8N1, AwokPins::kGpsRx,
                   AwokPins::kGpsTx);
   gpsStarted = true;
@@ -204,6 +210,14 @@ void updateGps() {
 
 bool gpsHasFix() {
   return gps.location.isValid() && gps.location.age() < 5000;
+}
+
+FleetLocation fleetLocalLocation() {
+  if (!gpsHasFix()) return FleetLocation();
+  const int16_t alt = gps.altitude.isValid() && gps.altitude.age() < 5000
+                          ? static_cast<int16_t>(gps.altitude.meters()) : 0;
+  return fleetLocation(static_cast<float>(gps.location.lat()),
+                       static_cast<float>(gps.location.lng()), alt);
 }
 
 int gpsSats() {
@@ -303,8 +317,10 @@ String wardriveRecordingLabel() {
   if (state == 3) return "SD WRITE FAILED";
   if (state == 0) return "NO SD RECORDING";
   if (!(wardriveActive || linkWardriveActive)) return "STOPPED";
-  if (state == 4) return gpsHasFix() ? "RELAY TO COORDINATOR" : "WAITING FOR GPS";
-  if (!gpsHasFix()) return wardriveStats.mode == 2 && wardriveStats.rows ? "RECORDING | LOCAL GPS LOST" : "WAITING FOR GPS";
+  if (state == 4) return "RELAY TO COORDINATOR";
+  if (fleetActive && fleetCoordinator && !gpsHasFix())
+    return "WAITING FOR COORDINATOR GPS";
+  if (!gpsHasFix() && !fleetActive) return "WAITING FOR GPS";
   return wardriveStats.rows ? "RECORDING" : "WAITING FOR SIGHTINGS";
 }
 
@@ -403,10 +419,15 @@ bool wardriveMacSeen(const uint8_t* mac) {
   const uint32_t b2 = (h1 + h2) % kWardriveBloomBits;
   const uint32_t b3 = (h1 + 2 * h2) % kWardriveBloomBits;
   const uint32_t b4 = (h1 + 3 * h2) % kWardriveBloomBits;
-  return (wardriveBloom[b1 >> 3] & (1 << (b1 & 7))) &&
-         (wardriveBloom[b2 >> 3] & (1 << (b2 & 7))) &&
-         (wardriveBloom[b3 >> 3] & (1 << (b3 & 7))) &&
-         (wardriveBloom[b4 >> 3] & (1 << (b4 & 7)));
+  if (!(wardriveBloom[b1 >> 3] & (1 << (b1 & 7))) ||
+      !(wardriveBloom[b2 >> 3] & (1 << (b2 & 7))) ||
+      !(wardriveBloom[b3 >> 3] & (1 << (b3 & 7))) ||
+      !(wardriveBloom[b4 >> 3] & (1 << (b4 & 7)))) return false;
+  // A Bloom hit can be a collision, particularly in long sessions. Confirm
+  // against the already allocated exact-MAC table before dropping a sighting.
+  for (int i = 0; i < wardriveMacCount; ++i)
+    if (memcmp(wardriveMacs[i], mac, 6) == 0) return true;
+  return false;
 }
 
 void wardriveAddMac(const uint8_t* mac) {
@@ -420,12 +441,20 @@ void wardriveAddMac(const uint8_t* mac) {
   wardriveBloom[b2 >> 3] |= (1 << (b2 & 7));
   wardriveBloom[b3 >> 3] |= (1 << (b3 & 7));
   wardriveBloom[b4 >> 3] |= (1 << (b4 & 7));
-  ++wardriveMacCount;
+  if (wardriveMacCount < kMaxWardriveMacs) {
+    memcpy(wardriveMacs[wardriveMacCount++], mac, 6);
+  } else {
+    // Keep recently added MACs exact. An evicted MAC may be logged again, but a
+    // new MAC is never silently rejected because the Bloom filter filled up.
+    memcpy(wardriveMacs[wardriveMacCursor], mac, 6);
+    wardriveMacCursor = (wardriveMacCursor + 1) % kMaxWardriveMacs;
+  }
 }
 
 void wardriveResetDedup() {
   memset(wardriveBloom, 0, sizeof(wardriveBloom));
   wardriveMacCount = 0;
+  wardriveMacCursor = 0;
 }
 
 // Open a FRESH CSV for this wardrive run: /awokxdag/wardrive-NNNN.csv, using the
@@ -490,7 +519,10 @@ void closeWardriveCsv() {
 }
 
 void flushWardriveCsv() {
-  if (wardriveCsvReady && g_wardriveFile) {
+  // The header is flushed when the file opens. Avoid touching the SD card on
+  // every timer tick when no new observation has been written.
+  if (wardriveCsvReady && g_wardriveFile &&
+      wardriveStats.rows != wardriveStats.flushedRows) {
     g_wardriveFile.flush();
     if (g_wardriveFile.getWriteError()) { wardriveStats.writeError = true; wardriveCsvReady = false; }
     else {
@@ -516,6 +548,7 @@ int wigleFrequencyMhz(int channel) {
 
 // Shared tail of a WiGLE row (timestamp, channel/frequency, RSSI, GPS, type).
 void appendWigleTail(File& file, int channel, int rssi, const char* type) {
+  const FleetLocation fix = fleetLocalLocation();
   file.print(gpsTimestamp());
   file.print(',');
   file.print(channel);
@@ -524,13 +557,14 @@ void appendWigleTail(File& file, int channel, int rssi, const char* type) {
   file.print(',');
   file.print(rssi);
   file.print(',');
-  file.print(String(gps.location.lat(), 6));
+  if (fix.valid) file.print(String(fix.lat, 6));
   file.print(',');
-  file.print(String(gps.location.lng(), 6));
+  if (fix.valid) file.print(String(fix.lon, 6));
   file.print(',');
-  file.print(String(gps.altitude.meters(), 1));
+  if (fix.valid) file.print(fix.alt);
   file.print(',');
-  file.print(String(gps.hdop.isValid() ? gps.hdop.hdop() * 5.0 : 0.0, 1));
+  if (gpsHasFix() && gps.hdop.isValid() && gps.hdop.age() < 5000)
+    file.print(String(gps.hdop.hdop() * 5.0, 1));
   file.print(",,0,");
   file.println(type);
 }
@@ -538,12 +572,16 @@ void appendWigleTail(File& file, int channel, int rssi, const char* type) {
 // The WiGLE row tail as a String (same fields/order as appendWigleTail): so the
 // full row can be both written to SD and streamed to the phone.
 String wardriveWigleTail(int channel, int rssi, const char* type) {
+  const FleetLocation fix = fleetLocalLocation();
+  const String lat = fix.valid ? String(fix.lat, 6) : String();
+  const String lon = fix.valid ? String(fix.lon, 6) : String();
+  const String alt = fix.valid ? String(fix.alt) : String();
+  const String accuracy = gpsHasFix() && gps.hdop.isValid() &&
+                                  gps.hdop.age() < 5000
+                              ? String(gps.hdop.hdop() * 5.0, 1) : String();
   return gpsTimestamp() + "," + String(channel) + "," +
          String(wigleFrequencyMhz(channel)) + "," + String(rssi) + "," +
-         String(gps.location.lat(), 6) + "," + String(gps.location.lng(), 6) +
-         "," + String(gps.altitude.meters(), 1) + "," +
-         String(gps.hdop.isValid() ? gps.hdop.hdop() * 5.0 : 0.0, 1) +
-         ",,0," + type;
+         lat + "," + lon + "," + alt + "," + accuracy + ",,0," + type;
 }
 
 // Persist a wardrive row to SD via persistent open file handle, and (on the
@@ -572,38 +610,50 @@ static void wardriveEmitRow(const String& line) {
   wardriveEmitRow(line.c_str(), line.length());
 }
 
-// Coordinator: merge a WiGLE row received from a fleet member. Dedups by id
-// (Wi-Fi BSSID / BLE address), builds the line from the member's own GPS carried
-// in the frame, and emits it through the same SD+phone sink as local rows. The
-// FirstSeen timestamp uses the coordinator's clock (rows stream in near real
-// time and the fleet is co-located, so it is within a second of the sighting).
-void wardriveEmitPeerRow(const FleetWardriveRow& r) {
-  if (wardriveMacSeen(r.id)) return;
-  wardriveAddMac(r.id);
+// Coordinator: use a worker's own fix if present; otherwise stamp the row with
+// the coordinator's fresh GPS location. Without either fix, leave the worker's
+// row unacknowledged so it is retried rather than writing blank coordinates.
+bool wardriveEmitPeerRow(const FleetWardriveRow& r) {
+  if (wardriveMacSeen(r.id)) return true;
+  const FleetLocation observed = fleetLocation(r.lat, r.lon, r.alt);
+  const FleetLocation fix = fleetChooseLocation(observed, fleetLocalLocation());
+  if (!fix.valid) return false;
+  char lat[20] = "", lon[20] = "", alt[16] = "";
+  if (fix.valid) {
+    snprintf(lat, sizeof(lat), "%.6f", fix.lat);
+    snprintf(lon, sizeof(lon), "%.6f", fix.lon);
+    snprintf(alt, sizeof(alt), "%d", (int)fix.alt);
+  }
   char line[256];
   const char* authStr = r.isBle ? "[BLE]" : wigleAuth((wifi_auth_mode_t)r.auth);
   const char* typeStr = r.isBle ? "BLE" : "WIFI";
   String escapedName = csvField(String(r.name));
   String ts = gpsTimestamp();
   int n = snprintf(line, sizeof(line),
-                   "%02X:%02X:%02X:%02X:%02X:%02X,%s,%s,%s,%u,%d,%d,%.6f,%.6f,%d.0,0.0,,0,%s",
+                   "%02X:%02X:%02X:%02X:%02X:%02X,%s,%s,%s,%u,%d,%d,%s,%s,%s,,,0,%s",
                    r.id[0], r.id[1], r.id[2], r.id[3], r.id[4], r.id[5],
                    escapedName.c_str(), authStr, ts.c_str(),
                    (unsigned)r.channel, wigleFrequencyMhz(r.channel), (int)r.rssi,
-                   r.lat, r.lon, (int)r.alt, typeStr);
+                   lat, lon, alt, typeStr);
   if (n > 0 && static_cast<size_t>(n) < sizeof(line)) {
     wardriveEmitRow(line, static_cast<size_t>(n));
+  } else {
+    return false;
   }
+  wardriveAddMac(r.id);
   if (r.isBle) ++wardriveBleCount; else ++wardriveNetworks;
+  return true;
 }
 
 void appendWardriveRow(const String& bssid, const String& ssid,
                        wifi_auth_mode_t auth, int channel, int rssi) {
+  if (!gpsHasFix()) return;
   wardriveEmitRow(bssid + "," + csvField(ssid) + "," + wigleAuth(auth) + "," +
                   wardriveWigleTail(channel, rssi, "WIFI"));
 }
 
 void appendWardriveBleRow(const String& address, const String& name, int rssi) {
+  if (!gpsHasFix()) return;
   wardriveEmitRow(address + "," + csvField(name) + ",[BLE]," +
                   wardriveWigleTail(0, rssi, "BLE"));
 }
@@ -614,7 +664,10 @@ class WardriveBleCallbacks : public NimBLEScanCallbacks {
  public:
   void onResult(const NimBLEAdvertisedDevice* device) override {
     const int next = (bleHitHead + 1) % kBleHitQueueSlots;
-    if (next == bleHitTail) return;  // queue full: drop
+    if (next == bleHitTail) {
+      wardriveBleQueueDrops.fetch_add(1, std::memory_order_relaxed);
+      return;
+    }
     BleHit& hit = bleHitQueue[bleHitHead];
     strncpy(hit.addr, device->getAddress().toString().c_str(),
             sizeof(hit.addr) - 1);
@@ -813,7 +866,8 @@ void drawWardriveTile(int x, int y, const char* label, uint32_t value) {
 // The same session information is used by solo, Split, and Fleet dashboards.
 void drawWardriveDashboardBody(const String& context) {
   const int storage = wardriveStorageState();
-  const uint16_t statusColor = storage == 0 || storage == 3 ? kBad : gpsHasFix() ? kGood : kWarn;
+  const uint16_t statusColor = storage == 0 || storage == 3 ? kBad
+      : fleetActive ? kGood : gpsHasFix() ? kGood : kWarn;
   const uint32_t flushAge = wardriveStats.didFlush ? (millis() - wardriveStats.lastFlushMs) / 1000 : 0;
   String local = gpsTimestamp();
 #ifdef AWOK_MINI_DISPLAY
@@ -826,7 +880,8 @@ void drawWardriveDashboardBody(const String& context) {
   display.dashboardLine(2, line, ILI9341_WHITE);
   snprintf(line, sizeof(line), "%s %.2fkm", wardriveElapsedText().c_str(), wardriveStats.distanceM / 1000.0);
   display.dashboardLine(3, line, ILI9341_WHITE);
-  snprintf(line, sizeof(line), "GPS %d sat fix %u%%", gpsSats(), wardriveStats.fixPercent());
+  const char* gpsSource = gpsHasFix() ? "local" : "none";
+  snprintf(line, sizeof(line), "GPS %s | %d sat", gpsSource, gpsSats());
   display.dashboardLine(4, line, gpsHasFix() ? kGood : kWarn);
   snprintf(line, sizeof(line), "%lu/min recent", (unsigned long)wardriveStats.perMinute());
   display.dashboardLine(5, line, kAccent);
@@ -834,7 +889,14 @@ void drawWardriveDashboardBody(const String& context) {
            (unsigned long)wardriveStats.rows, (unsigned long)(wardriveStats.bytes / 1024));
   display.dashboardLine(6, line, statusColor);
   snprintf(line, sizeof(line), wardriveStats.didFlush ? "Flushed %lus ago" : "No flush yet", (unsigned long)flushAge);
-  display.dashboardLine(7, storage == 4 || wardriveStats.mode == 1 ? context.c_str() : line, kMuted);
+  const uint32_t bleDrops = wardriveBleQueueDrops.load(std::memory_order_relaxed);
+  if ((wardriveActive || linkWardriveActive) && (wardriveWifiScanRestarts || bleDrops)) {
+    snprintf(line, sizeof(line), "Retry %lu Drop %lu",
+             (unsigned long)wardriveWifiScanRestarts, (unsigned long)bleDrops);
+    display.dashboardLine(7, line, kWarn);
+  } else {
+    display.dashboardLine(7, storage == 4 || wardriveStats.mode == 1 ? context.c_str() : line, kMuted);
+  }
   display.dashboardLine(8, storage == 4 ? "Worker: no local CSV" : wardriveCsvName().c_str(), kMuted);
 #else
   display.setTextSize(1); display.setTextColor(statusColor, kBackground);
@@ -851,7 +913,7 @@ void drawWardriveDashboardBody(const String& context) {
                  (unsigned long)wardriveStats.perMinute());
   display.setTextColor(gpsHasFix() ? kGood : kWarn, kBackground);
   display.setCursor(6, 176);
-  display.printf("GPS %s | %d satellites", gpsHasFix() ? "FIX" : "NO FIX", gpsSats());
+  display.printf("GPS %s | %d satellites", gpsHasFix() ? "LOCAL" : "NONE", gpsSats());
   display.setCursor(6, 190);
   const double hdop = gps.hdop.isValid() && gps.hdop.age() < 5000 ? gps.hdop.hdop() : -1;
   if (hdop >= 0) display.printf("HDOP %.1f | fix coverage %u%%", hdop, wardriveStats.fixPercent());
@@ -868,7 +930,15 @@ void drawWardriveDashboardBody(const String& context) {
   else display.print("Waiting for first flush");
   display.setCursor(12, 243);
   display.print(storage == 4 ? "Worker: no local CSV" : clipped(wardriveCsvName(), 35));
-  display.setTextColor(kMuted, kBackground); display.setCursor(6, 266); display.print(clipped(context, 37));
+  const uint32_t bleDrops = wardriveBleQueueDrops.load(std::memory_order_relaxed);
+  const bool captureWarning = (wardriveActive || linkWardriveActive) &&
+                              (wardriveWifiScanRestarts || bleDrops);
+  display.setTextColor(captureWarning ? kWarn : kMuted, kBackground);
+  display.setCursor(6, 266);
+  if (captureWarning)
+    display.printf("Wi-Fi retries %lu | BLE drops %lu",
+                   (unsigned long)wardriveWifiScanRestarts, (unsigned long)bleDrops);
+  else display.print(clipped(context, 37));
 #endif
 }
 
@@ -892,10 +962,12 @@ static void wardriveEnterWifi() {
 static void wardriveExitWifi() { WiFi.scanDelete(); }
 
 void startWardrive() {
-  stopActiveTools();  // release the previous tool before bringing up both radios
+  if (!stopActiveTools()) return;  // release the previous tool before both radios
   wardriveNetworks = 0;
   wardriveBleCount = 0;
   wardriveScans = 0;
+  wardriveWifiScanRestarts = 0;
+  wardriveBleQueueDrops.store(0, std::memory_order_relaxed);
   wardriveResetDedup();
   bleHitHead = 0;
   bleHitTail = 0;
@@ -994,6 +1066,7 @@ void updateWardrive() {
       WiFi.scanNetworks(true, true, false, 120);
     } else {
       // not started / failed: kick off a scan
+      ++wardriveWifiScanRestarts;
       WiFi.scanNetworks(true, true, false, 120);
     }
   }

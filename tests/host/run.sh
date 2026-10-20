@@ -8,3 +8,24 @@ CXX="${CXX:-g++}"
   -I../../AWOKxDAG \
   -o test_network_parse test_network_parse.cpp
 ./test_network_parse
+fleet_test_bin="$(mktemp)"
+trap 'rm -f "$fleet_test_bin"' EXIT
+"$CXX" -std=c++17 -Wall -Wextra -Werror -O1 \
+  -fsanitize=address,undefined \
+  -I../../AWOKxDAG \
+  -o "$fleet_test_bin" test_fleet_location.cpp
+"$fleet_test_bin"
+camera_test_bin="$(mktemp)"
+trap 'rm -f "$fleet_test_bin" "$camera_test_bin"' EXIT
+"$CXX" -std=c++17 -Wall -Wextra -Werror -O1 \
+  -fsanitize=address,undefined \
+  -I../../AWOKxDAG \
+  -o "$camera_test_bin" test_camera_signatures.cpp
+"$camera_test_bin"
+saved_wifi_test_bin="$(mktemp)"
+trap 'rm -f "$fleet_test_bin" "$camera_test_bin" "$saved_wifi_test_bin"' EXIT
+"$CXX" -std=c++17 -Wall -Wextra -Werror -O1 \
+  -fsanitize=address,undefined \
+  -I../../AWOKxDAG \
+  -o "$saved_wifi_test_bin" test_saved_wifi.cpp
+"$saved_wifi_test_bin"

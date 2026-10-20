@@ -275,6 +275,9 @@ void onLinkRecv(const esp_now_recv_info_t* info, const uint8_t* data, int len) {
 }
 
 bool linkEnsureEspNow() {
+#ifdef AWOK_GATT_AUDIT
+  if (gattAuditActive()) return false;  // the selected-device connection owns BLE
+#endif
   if (linkEspNowReady && WiFi.getMode() == WIFI_STA) return true;
   // A BLE-only tool visited in between can deinit Wi-Fi (and with it ESP-NOW);
   // treat that as stale and rebuild.
@@ -329,7 +332,9 @@ void fleetOnAckFrame(const uint8_t* data) {
 uint8_t fleetLocalCaps() {
   uint8_t c = kFleetCapBle;  // every supported AxD board can scan BLE
   if (AwokPins::kDualBand) c |= kFleetCapDualBand;
-  c |= kFleetCapGps;         // GPS is wired on the C5 boards
+  // Optional GPS ports (notably Cardputer Grove) are not proof that a GPS is
+  // connected. Advertise this cap once the receiver has produced a position.
+  if (gps.location.isValid()) c |= kFleetCapGps;
   if (sdReady) c |= kFleetCapSd;
   return c;
 }
@@ -664,9 +669,10 @@ void fleetQueueOutRow(const uint8_t* id, const String& name, uint8_t auth,
   r.auth = auth;
   r.isBle = isBle ? 1 : 0;
   r.battery = static_cast<uint8_t>(batteryPercentNow());
-  r.lat = gps.location.isValid() ? static_cast<float>(gps.location.lat()) : 0.0f;
-  r.lon = gps.location.isValid() ? static_cast<float>(gps.location.lng()) : 0.0f;
-  r.alt = static_cast<int16_t>(gps.altitude.isValid() ? gps.altitude.meters() : 0);
+  const FleetLocation fix = fleetLocalLocation();
+  r.lat = fix.valid ? fix.lat : NAN;
+  r.lon = fix.valid ? fix.lon : NAN;
+  r.alt = fix.valid ? fix.alt : 0;
   strncpy(r.name, name.c_str(), sizeof(r.name) - 1);
   const int next = (fleetOutHead + 1) % kFleetRowRingSlots;
   if (next == fleetOutTail)  // ring full: drop oldest unacked row
@@ -703,18 +709,17 @@ void fleetCoordDrainRows() {
     ++drained;
     if (r.sessionId != fleetSessionId) continue;
     const int m = fleetIndexOfMac(r.src);
-    if (m >= 0) {
-      fleetMembers[m].lastSeenMs = millis();
-      // If the worker reset its sequence (e.g. rebooted/rejoined), allow resync
-      if (r.seq < fleetMembers[m].ackSeq && r.seq <= 2) {
-        fleetMembers[m].ackSeq = r.seq;
-      } else if (r.seq > fleetMembers[m].ackSeq) {
-        fleetMembers[m].ackSeq = r.seq;
-      }
-      fleetMembers[m].rows++;
-      fleetMembers[m].battery = r.battery;
+    if (m < 0) continue;
+    fleetMembers[m].lastSeenMs = millis();
+    if (!wardriveEmitPeerRow(r)) continue;  // retry after coordinator GPS fix
+    // If the worker reset its sequence (e.g. rebooted/rejoined), allow resync
+    if (r.seq < fleetMembers[m].ackSeq && r.seq <= 2) {
+      fleetMembers[m].ackSeq = r.seq;
+    } else if (r.seq > fleetMembers[m].ackSeq) {
+      fleetMembers[m].ackSeq = r.seq;
     }
-    wardriveEmitPeerRow(r);  // dedups by id; writes SD + streams to phone
+    fleetMembers[m].rows++;
+    fleetMembers[m].battery = r.battery;
   }
 }
 
@@ -836,7 +841,8 @@ void updateFleetBleNode(uint32_t now) {
   while (bleHitTail != bleHitHead) {
     const BleHit& hit = bleHitQueue[bleHitTail];
     uint8_t mac[6];
-    if (gpsHasFix() && parseBssid(String(hit.addr), mac) &&
+    if ((!fleetCoordinator || gpsHasFix()) &&
+        parseBssid(String(hit.addr), mac) &&
         !wardriveMacSeen(mac)) {
       wardriveAddMac(mac);
       if (fleetCoordinator)
@@ -1313,7 +1319,9 @@ void linkDispatchCommand(uint8_t op, uint8_t arg) {
     case kAxdCmdFleetStart: fleetStartWardrive(); break;
     case kAxdCmdFleetJoin: fleetArm(); break;
     case kAxdCmdFleetStop: fleetLeave(); break;
-    case kAxdCmdStopHome: stopActiveTools(); drawHome(); break;
+    case kAxdCmdStopHome:
+      if (stopActiveTools()) drawHome();
+      break;
     default: break;
   }
 }
@@ -1590,7 +1598,8 @@ void linkIngestScan(int result) {
   for (int i = 0; i < result; ++i) {
     uint8_t* bssid = WiFi.BSSID(i);
     if (!bssid) continue;
-    if (!gpsHasFix() || wardriveMacSeen(bssid)) continue;
+    if (((!fleetActive || fleetCoordinator) && !gpsHasFix()) ||
+        wardriveMacSeen(bssid)) continue;
     wardriveAddMac(bssid);
     if (fleetActive && !fleetCoordinator) {
       // Worker: queue the row for the coordinator to merge (one CSV).
@@ -1606,7 +1615,7 @@ void linkIngestScan(int result) {
 }
 
 void startLinkWardrive() {
-  stopActiveTools();  // release the previous tool before allocating this drive
+  if (!stopActiveTools()) return;  // release the previous tool first
   if (!linkEnsureEspNow()) {
     drawLinkWardrive();
     return;
@@ -1615,6 +1624,8 @@ void startLinkWardrive() {
   wardriveNetworks = 0;
   wardriveBleCount = 0;  // dedicated Fleet BLE nodes still scan below
   wardriveScans = 0;
+  wardriveWifiScanRestarts = 0;
+  wardriveBleQueueDrops.store(0, std::memory_order_relaxed);
   wardriveResetDedup();
   wardriveStartMs = millis();
   resetWardriveSessionStats(true);
@@ -1755,6 +1766,9 @@ void updateLinkWardrive(uint32_t now) {
 }
 
 void updateLink() {
+#ifdef AWOK_GATT_AUDIT
+  if (gattAuditActive()) return;  // resume bridge control after Back closes the client
+#endif
   if (linkState == kLinkOff && !linkWardriveActive && !remoteActive &&
       !fleetActive && !fleetListening)
     return;
@@ -1884,7 +1898,8 @@ void drawFleetStatus() {
   display.setTextSize(1);
   display.setTextColor(fleetWardriveOn ? kGood : kWarn, kBackground);
   display.setCursor(120, 52);
-  display.print(fleetWardriveOn ? (wardriveStorageState() == 3 ? "SD ERROR" : gpsHasFix() ? "RUNNING" : "NO FIX") : "READY");
+  display.print(fleetWardriveOn ? (wardriveStorageState() == 3 ? "SD ERROR" :
+                 fleetCoordinator && !gpsHasFix() ? "WAIT GPS" : "RUNNING") : "READY");
   display.setTextColor(ILI9341_WHITE, kBackground);
   display.setCursor(120, 68);
   display.printf("Nodes: %d", fleetMemberCount);
@@ -1912,14 +1927,18 @@ void drawFleetStatus() {
   display.printf("%s %.2fkm %lu/min", wardriveElapsedText().c_str(), wardriveStats.distanceM / 1000.0,
                  (unsigned long)wardriveStats.perMinute());
   display.setCursor(6, 214);
-  display.printf("GPS %d sat | fix %u%% | %s", gpsSats(), wardriveStats.fixPercent(), gpsHasFix() ? "OK" : "LOST");
+  display.printf("GPS %d sat | fix %u%% | %s", gpsSats(), wardriveStats.fixPercent(),
+                 gpsHasFix() ? "LOCAL" : "NONE");
   display.setTextColor(wardriveStorageState() == 3 || wardriveStorageState() == 0 ? kBad : kGood, kBackground);
   display.setCursor(6, 230); display.print(wardriveRecordingLabel());
   display.setCursor(6, 244);
   if (fleetCoordinator) display.printf("SD %lu rows | flushed %lu", (unsigned long)wardriveStats.rows, (unsigned long)wardriveStats.flushedRows);
   else display.print("Merged CSV lives on coordinator");
-  display.setTextColor(kMuted, kBackground);
-  display.setCursor(6, 260); display.print(gpsTimezoneLabel());
+  const uint32_t bleDrops = wardriveBleQueueDrops.load(std::memory_order_relaxed);
+  display.setTextColor(bleDrops ? kWarn : kMuted, kBackground);
+  display.setCursor(6, 260);
+  if (bleDrops) display.printf("BLE queue drops %lu", (unsigned long)bleDrops);
+  else display.print(gpsTimezoneLabel());
 #endif
 
   if (fleetCoordinator) {

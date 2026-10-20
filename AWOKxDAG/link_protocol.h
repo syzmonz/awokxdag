@@ -28,7 +28,7 @@ enum LinkMsgType : uint8_t {
   kLinkMsgTelem = 3,       // running counts + channel + session id (status back)
   kLinkMsgCommand = 4,     // bridge -> screen: run a tool (opcode in `reserved`)
   kLinkMsgWifiResult = 5,  // screen -> bridge: one scanned AP (AxdWifiResult)
-  kLinkMsgBleResult = 20,
+  kLinkMsgBleResult = 200,
   // Fleet Wardrive (N linked nodes splitting the channel plan into one CSV):
   kLinkMsgFleetInvite = 6,    // coordinator -> all: join my session (LinkPacket)
   kLinkMsgFleetJoin = 7,      // member -> coordinator: joining (caps in flags)
@@ -163,8 +163,8 @@ struct FleetWardriveRow {
   uint8_t auth = 0;      // wifi_auth_mode_t
   uint8_t isBle = 0;
   uint8_t battery = 0;
-  float lat = 0.0f;
-  float lon = 0.0f;
+  float lat = 0.0f;  // NaN when sender has no fresh fix
+  float lon = 0.0f;  // NaN when sender has no fresh fix
   int16_t alt = 0;
   char name[33] = {0};   // SSID or BLE name (null-terminated)
 };

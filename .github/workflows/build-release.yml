@@ -7,7 +7,7 @@ on:
       version:
         description: "Release version (e.g. 1.0.0)"
         required: true
-        default: "1.7.5-syz.3"
+        default: "1.7.8-syz.1"
       prerelease:
         description: "Mark as pre-release?"
         type: boolean
@@ -57,6 +57,14 @@ jobs:
             "XPT2046_Touchscreen" \
             "TinyGPSPlus"
 
+      - name: Install Cardputer libraries
+        if: ${{ matrix.variant == 'cardputer-v11' }}
+        run: |
+          arduino-cli lib install \
+            "M5GFX@0.2.27" \
+            "M5Unified@0.2.20" \
+            "M5Cardputer@1.1.1"
+
       - name: Compile ${{ matrix.label }} (produces the merged image)
         if: ${{ !matrix.board }}
         # -z muldefs lets our ieee80211_raw_frame_sanity_check override win over
@@ -67,8 +75,8 @@ jobs:
         # (pins, display, radio memory policy) independent of the sketch's
         # Arduino IDE default.
         # AWOKxDAG is BLE Observer-only (scan; no client/server/adv anywhere in
-        # the sketch), so the CONFIG_BT_NIMBLE_ROLE_*_DISABLED flags trim
-        # NimBLE-Arduino's default Central/Peripheral/Broadcaster footprint.
+        # the sketch). C5 screen boards retain Central for GATT audit; other
+        # screen boards trim Central/Peripheral/Broadcaster.
         # The actual fix for BLE scan failing with HCI "Memory Capacity
         # Exceeded" (NimBLE rc=519) on the C5 is the time-multiplex
         # RadioScheduler (only one radio DMA-resident at a time) -- the C5's
@@ -80,10 +88,14 @@ jobs:
         # something is wrong, but it's what surfaces NimBLE's own error rc
         # codes, which are compiled out entirely at the default level 0.
         run: |
+          CENTRAL_FLAG="-DCONFIG_BT_NIMBLE_ROLE_CENTRAL_DISABLED"
+          case "${{ matrix.define }}" in
+            AWOK_DUAL_C5_TOUCH|AWOK_DUAL_C5_MINI|AWOK_NM_CYD_C5) CENTRAL_FLAG="" ;;
+          esac
           arduino-cli compile \
             --fqbn "${{ matrix.fqbn }}" \
             --build-property "compiler.c.elf.extra_flags=-Wl,-z,muldefs -Wl,--wrap=esp_wifi_init -Wl,--wrap=esp_bt_controller_init" \
-            --build-property "compiler.cpp.extra_flags=-D${{ matrix.define }} -DCONFIG_BT_NIMBLE_ROLE_CENTRAL_DISABLED -DCONFIG_BT_NIMBLE_ROLE_PERIPHERAL_DISABLED -DCONFIG_BT_NIMBLE_ROLE_BROADCASTER_DISABLED" \
+            --build-property "compiler.cpp.extra_flags=-D${{ matrix.define }} ${CENTRAL_FLAG} -DCONFIG_BT_NIMBLE_ROLE_PERIPHERAL_DISABLED -DCONFIG_BT_NIMBLE_ROLE_BROADCASTER_DISABLED" \
             --build-property "build.code_debug=1" \
             --build-path "build-${{ matrix.variant }}" \
             AWOKxDAG/AWOKxDAG.ino

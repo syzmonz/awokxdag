@@ -1,6 +1,9 @@
 // Arduino IDE selection.
 #if !defined(AWOK_DUAL_C5_TOUCH) && !defined(AWOK_DUAL_C5_MINI) && \
-    !defined(AWOK_DUAL_C5_BRIDGE) && \
+    !defined(AWOK_NM_CYD_C5) && \
+    !defined(AWOK_CYD_2432S028) && !defined(AWOK_HALEHOUND_E32R28T) && \
+    !defined(AWOK_HALEHOUND_E32R35T) && !defined(AWOK_HALEHOUND_NM_RF_HAT) && \
+    !defined(AWOK_DUAL_C5_BRIDGE) && !defined(AWOK_LILYGO_T_DONGLE_C5_BRIDGE) && \
     !defined(AWOK_DUAL_ESP32_TOUCH_V1) && !defined(AWOK_DUAL_ESP32_TOUCH_V2) && \
     !defined(AWOK_DUAL_ESP32_TOUCH_V3) && \
     !defined(AWOK_DUAL_ESP32_MINI_V1) && !defined(AWOK_DUAL_ESP32_MINI_V2) && \
@@ -10,8 +13,9 @@
     !defined(AWOK_DUAL_ESP32_TOUCH_BRIDGE_V3) && \
     !defined(AWOK_DUAL_ESP32_MINI_BRIDGE_V1) && \
     !defined(AWOK_DUAL_ESP32_MINI_BRIDGE_V2) && \
-    !defined(AWOK_DUAL_ESP32_MINI_BRIDGE_V3)
+    !defined(AWOK_DUAL_ESP32_MINI_BRIDGE_V3) && !defined(AWOK_CARDPUTER_V11)
 //#define AWOK_DUAL_C5_TOUCH
+//#define AWOK_NM_CYD_C5
 #define AWOK_DUAL_C5_MINI
 //#define AWOK_DUAL_ESP32_TOUCH_V1
 //#define AWOK_DUAL_ESP32_TOUCH_V2
@@ -21,6 +25,7 @@
 //#define AWOK_DUAL_ESP32_MINI_V3
 #endif
 #include "awok_common.h"
+#include <atomic>
 
 // The Wi-Fi driver refuses to transmit raw management frames it deems
 // malformed, which includes deauthentication and disassociation frames.
@@ -36,7 +41,10 @@ extern "C" int ieee80211_raw_frame_sanity_check(int32_t arg, int32_t arg2,
 #ifdef AWOK_MINI_DISPLAY
 AwokMiniDisplay display;
 #elif defined(AWOK_HEADLESS)
-AwokHeadlessDisplay display;  // no-op sink; the bridge has no screen
+AwokHeadlessDisplay display;  // no-op sink for menu rendering on BLE bridges
+#ifdef AWOK_LILYGO_T_DONGLE_C5_BRIDGE
+AwokDongleDisplay bridgePanel;
+#endif
 // No touch panel on the bridge; a stub keeps every touch.* call compiling and
 // inert (touched() == false), so the input paths just never report a press.
 struct AwokHeadlessTouch {
@@ -46,9 +54,23 @@ struct AwokHeadlessTouch {
   TS_Point getPoint() { return TS_Point(0, 0, 0); }
 } touch;
 #else
+#ifdef AWOK_CLASSIC_CYD
+#include "cyd_touch.h"
+SPIClass cydDisplaySpi(HSPI);
+AwokTouchDisplay display(AwokPins::kDisplayDc, AwokPins::kDisplayCs,
+                         AwokPins::kDisplayReset, &cydDisplaySpi);
+#ifdef AWOK_ST7796_TOUCH
+AwokCydTouch touch(AwokPins::kTouchCs, AwokPins::kTouchSck,
+                   AwokPins::kTouchMiso, AwokPins::kTouchMosi, &cydDisplaySpi);
+#else
+AwokCydTouch touch(AwokPins::kTouchCs, AwokPins::kTouchSck,
+                   AwokPins::kTouchMiso, AwokPins::kTouchMosi, nullptr);
+#endif
+#else
 AwokTouchDisplay display(AwokPins::kDisplayDc, AwokPins::kDisplayCs,
                          AwokPins::kDisplayReset);
 XPT2046_Touchscreen touch(AwokPins::kTouchCs);
+#endif
 #endif
 
 #if defined(AWOK_MINI_DISPLAY) || defined(AWOK_HEADLESS)
@@ -238,13 +260,16 @@ uint32_t lastWardriveDrawMs = 0;
 bool wardriveCsvReady = false;
 String g_wardriveCsvPath;  // this run's CSV file (a new one is made each start)
 File g_wardriveFile;       // persistent open file handle during wardrive
-uint8_t wardriveBloom[kWardriveBloomFilterBytes] = {0};  // fast O(1) MAC deduplication bitset
-uint8_t wardriveMacs[kMaxWardriveMacs][6];
+uint8_t wardriveBloom[kWardriveBloomFilterBytes] = {0};  // fast negative check
+uint8_t wardriveMacs[kMaxWardriveMacs][6];  // exact recently added MACs
 int wardriveMacCount = 0;
+int wardriveMacCursor = 0;
 uint32_t wardriveBleCount = 0;
+uint32_t wardriveWifiScanRestarts = 0;
+std::atomic<uint32_t> wardriveBleQueueDrops{0};
 BleHit bleHitQueue[kBleHitQueueSlots];
-volatile int bleHitHead = 0;
-volatile int bleHitTail = 0;
+std::atomic<int> bleHitHead{0};
+std::atomic<int> bleHitTail{0};
 
 // Link Mode (ESP-NOW pairing + Split Wardrive). Cross-tab globals must be
 // defined here (Arduino auto-prototypes functions but not variables, and
@@ -394,8 +419,10 @@ String bytesToHex(const std::string& data, size_t maximumBytes) {
 }
 
 bool initializeSdCard() {
+#ifndef AWOK_CARDPUTER_V11
   digitalWrite(AwokPins::kDisplayCs, HIGH);
   if (AwokPins::kTouchCs >= 0) digitalWrite(AwokPins::kTouchCs, HIGH);
+#endif
   digitalWrite(AwokPins::kSdCs, HIGH);
 
   if (!SD.begin(AwokPins::kSdCs, SPI, kSdClockHz) ||
@@ -833,8 +860,16 @@ constexpr int kMenuCardHeight = 44;
 // kBad for destructive entries).
 void drawMenuCard(int y, const String& title, const String& detail, uint16_t outline) {
 #ifdef AWOK_MINI_DISPLAY
-  display.button(8, y, 224, kMenuCardHeight, (title + " | " + detail).c_str(),
-                 outline);
+  // Mini: the category is the only selectable line (gets the ">" marker); the
+  // description is a separate, unmarked muted line beneath it so the two are
+  // clearly distinct.
+  display.button(8, y, 224, kMenuCardHeight, title.c_str(), outline);
+  if (detail.length()) {
+    display.setTextSize(1);
+    display.setTextColor(kMuted, kBackground);
+    display.setCursor(16, y + 22);
+    display.print(detail);
+  }
 #else
   display.drawRoundRect(8, y, 224, kMenuCardHeight, 5, outline);
   display.setTextSize(title.length() <= 17 ? 2 : 1);
@@ -871,12 +906,14 @@ void drawReconResultFooter(const char* back, const char* action, int count) {
     if (action) drawFourButtonFooter(back, "Prev", "Next", action);
     else drawThreeButtonFooter(back, "Prev", "Next");
   } else {
-    drawFooter(back, action ? action : back);
+    // A Back-only screen would otherwise show two identical labels; give the
+    // second slot a Home button instead.
+    drawFooter(back, action ? action : "Home");
   }
 }
 
 // Footer hit-test mirroring drawReconResultFooter. Returns 0=Back, 1=Prev,
-// 2=Next, 3=Action, and advances reconResultPage for Prev/Next.
+// 2=Next, 3=Action, 4=Home, and advances reconResultPage for Prev/Next.
 int reconResultFooterHit(int x, int count, bool hasAction) {
   const int pages = reconResultPages(count);
   if (pages > 1) {
@@ -891,7 +928,8 @@ int reconResultFooterHit(int x, int count, bool hasAction) {
     reconResultPage = (reconResultPage + 1) % pages;
     return 2;
   }
-  return (hasAction && x >= kScreenWidth / 2) ? 3 : 0;
+  if (x < kScreenWidth / 2) return 0;
+  return hasAction ? 3 : 4;  // right slot: Action, or Home on a Back-only screen
 }
 
 void drawAboutPage() {
@@ -934,7 +972,7 @@ void drawAboutPage() {
   display.setTextColor(kMuted, kBackground);
   display.setCursor(6, 218);
   display.print("Tap anywhere to go back.");
-  drawFooter("Back", "Back");
+  drawFooter("Back", "Home");  // both return to the Home tiles (overlay: any tap)
 }
 
 // Home destinations. Files and Settings are first-class entries here so neither
@@ -1250,7 +1288,18 @@ void drawBleDetail() {
   const char* hint = (selectedBle.flipperLike ? "Flipper-like service" : "");
   display.print(*hint ? "Flipper-like UUID; identity unverified"
                       : "Passive advertisement metadata only.");
+#ifdef AWOK_GATT_AUDIT
+  if (selectedBle.connectable) {
+    display.fillRect(0, kFooterTop, kScreenWidth, kScreenHeight - kFooterTop,
+                     kBackground);
+    drawButton(4, 284, 112, 30, "Back", kMuted);
+    drawSmallButton(124, 284, 112, 30, "GATT Audit", kAccent);
+  } else {
+    drawFooter("Back", "Rescan");
+  }
+#else
   drawFooter("Back", "Rescan");
+#endif
 }
 
 int accessPointsOnChannel(int channel) {
@@ -2105,7 +2154,7 @@ void showToolMemoryError(const char* tool) {
   display.print("Tool could not start.");
   display.setCursor(6, 80);
   display.print("Check Serial Monitor.");
-  drawFooter("Home", "Home");
+  drawFooter("Back", "Home");  // overlay: any tap returns to the Home tiles
 }
 
 void showRadioError(const char* message) {
@@ -2121,13 +2170,18 @@ void showRadioError(const char* message) {
   display.print("Radio initialization failed.");
   display.setCursor(6, 80);
   display.print("Check Serial Monitor for details.");
-  drawFooter("Home", "Home");
+  drawFooter("Back", "Home");  // overlay: any tap returns to the Home tiles
 }
 
 bool ensureWifiStation(bool releaseBle) {
   // Wi-Fi-only tools free the BLE controller to leave more runtime headroom.
   // Dual-radio views pass releaseBle=false to keep BLE up alongside Wi-Fi.
-  if (releaseBle) releaseBleMemory();
+  if (releaseBle) {
+    releaseBleMemory();
+#ifdef AWOK_GATT_AUDIT
+    if (gattAuditActive()) return false;  // disconnect could not finish safely
+#endif
+  }
   if (WiFi.getMode() == WIFI_STA) return true;
   logMemory("before Wi-Fi init");
   // A failed esp_wifi_init logs 0x3001 on its deinit cleanup (driver never
@@ -2175,6 +2229,14 @@ void releaseBleMemory() {
   // (enforced in awok_common.h) cleans up the scan timer BEFORE port teardown;
   // 2.5.0 instead dereferenced the freed NPL function table in ~NimBLEScan.
   if (!NimBLEDevice::isInitialized()) return;
+#ifdef AWOK_GATT_AUDIT
+  // NimBLEClient owns a host callout. Delete it while the host is alive;
+  // deinit(true) would otherwise destroy it after nimble_port_deinit().
+  if (gattAuditActive()) {
+    if (!stopGattAuditForRadio()) return;
+    Serial.println("[gatt] audit closed for radio switch");
+  }
+#endif
   NimBLEScan* scan = NimBLEDevice::getScan();
   if (scan) {
     scan->stop();
@@ -2527,7 +2589,26 @@ void initializeDisplayAndTouch() {
 #ifdef AWOK_HEADLESS
   display.begin();
   display.setTextWrap(false);
+#ifdef AWOK_LILYGO_T_DONGLE_C5_BRIDGE
+  // LCD and microSD share the bus and have independent chip selects.
+  pinMode(AwokPins::kDisplayCs, OUTPUT);
+  digitalWrite(AwokPins::kDisplayCs, HIGH);
+  pinMode(AwokPins::kSdCs, OUTPUT);
+  digitalWrite(AwokPins::kSdCs, HIGH);
+  SPI.begin(AwokPins::kSpiSck, AwokPins::kSpiMiso, AwokPins::kSpiMosi,
+            AwokPins::kSdCs);
+  bridgePanel.begin();
+#endif
 #elif defined(AWOK_MINI_DISPLAY)
+#ifdef AWOK_CARDPUTER_V11
+  if (!display.begin()) {
+    while (true) delay(1000);
+  }
+  pinMode(AwokPins::kSdCs, OUTPUT);
+  digitalWrite(AwokPins::kSdCs, HIGH);
+  SPI.begin(AwokPins::kSpiSck, AwokPins::kSpiMiso, AwokPins::kSpiMosi,
+            AwokPins::kSdCs);
+#else
   for (int pin : {AwokPins::kButtonLeft, AwokPins::kButtonCenter,
                   AwokPins::kButtonUp, AwokPins::kButtonRight,
                   AwokPins::kButtonDown}) {
@@ -2543,6 +2624,7 @@ void initializeDisplayAndTouch() {
   if (!display.begin()) {
     while (true) delay(1000);
   }
+#endif
   display.setTextWrap(false);
 #else
   pinMode(AwokPins::kDisplayCs, OUTPUT);
@@ -2551,10 +2633,21 @@ void initializeDisplayAndTouch() {
   digitalWrite(AwokPins::kDisplayCs, HIGH);
   digitalWrite(AwokPins::kTouchCs, HIGH);
   digitalWrite(AwokPins::kSdCs, HIGH);
+#ifdef AWOK_CLASSIC_CYD
+  SPI.begin(AwokPins::kSpiSck, AwokPins::kSpiMiso, AwokPins::kSpiMosi, -1);
+  cydDisplaySpi.begin(AwokPins::kDisplaySpiSck, AwokPins::kDisplaySpiMiso,
+                      AwokPins::kDisplaySpiMosi, -1);
+  touch.begin();
+#else
   touch.begin();
   SPI.end();
   SPI.begin(AwokPins::kSpiSck, AwokPins::kSpiMiso, AwokPins::kSpiMosi, -1);
+#endif
+#ifdef AWOK_CYD_NATIVE_320X240
+  touch.setRotation(3);
+#else
   touch.setRotation(0);
+#endif
   pinMode(AwokPins::kBacklight, OUTPUT);
   digitalWrite(AwokPins::kBacklight, AwokPins::kBacklightOn ? HIGH : LOW);
   display.begin(27000000);
@@ -2612,6 +2705,9 @@ void setup() {
     delay(kBootScreenMs);
   }
   initializeSdCard();
+#ifdef AWOK_LILYGO_T_DONGLE_C5_BRIDGE
+  bridgePanel.update(sdReady, false, false);
+#endif
   initGps();
   initializeFirmwareAudit();
   recordFirmwareAudit(
@@ -2625,6 +2721,9 @@ void setup() {
 #ifdef AWOK_HEADLESS
   bridgeBleBegin();  // orange bridge: run the BLE GATT server the phone connects
                      // to; commands dispatch locally or relay to the white chip.
+#ifdef AWOK_LILYGO_T_DONGLE_C5_BRIDGE
+  bridgePanel.update(sdReady, true, g_bridgePhoneConnected);
+#endif
 #else
   remoteBegin();  // Touch and Mini alike: listen for the orange bridge chip so
                   // a phone can drive this screen chip over ESP-NOW.
@@ -2649,6 +2748,11 @@ void loop() {
   }
 #endif
 #ifdef AWOK_MINI_DISPLAY
+#ifdef AWOK_CARDPUTER_V11
+  M5Cardputer.update();
+  handleCardputerEscape();
+  handleCardputerTextInput();
+#endif
   updateMiniJoystick();
 #endif
   handleTouch();
@@ -2691,6 +2795,9 @@ void loop() {
   updateLink();
 #ifdef AWOK_HEADLESS
   bridgeServiceCommand();  // run any phone command off the BLE host task
+#ifdef AWOK_LILYGO_T_DONGLE_C5_BRIDGE
+  bridgePanel.update(sdReady, true, g_bridgePhoneConnected);
+#endif
   // Bridge: stream live status to the phone about once a second (no ESP-NOW).
   static uint32_t lastBridgeStatusMs = 0;
   if (g_bridgePhoneConnected && millis() - lastBridgeStatusMs >= 1000) {
