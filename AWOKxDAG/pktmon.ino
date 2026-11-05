@@ -33,7 +33,8 @@ constexpr int kPktGraphRows = 160;
 constexpr int kPktGraphCenter = 120;
 constexpr uint32_t kPktGraphRowMs = 80;
 constexpr uint32_t kPktGraphRedrawMs = 100;
-constexpr float kPktRateGain = 8.0f;
+constexpr float kPktRateFull = 7500.0f;
+constexpr float kPktSliceFull = kPktRateFull * (float)kPktGraphRowMs / 1000.0f;
 static int8_t pktDispRssi = -127;
 constexpr int kPktFftN = 128;
 constexpr int kPktBins = 64;
@@ -204,7 +205,8 @@ static void pktPushRow() {
     mag[bin] = sqrtf(pktFftRe[bin] * pktFftRe[bin] + pktFftIm[bin] * pktFftIm[bin]);
     if (mag[bin] > mx) mx = mag[bin];
   }
-  float bright = kPktRateGain * (float)slice;
+  float bright = 100.0f * log2f(1.0f + (float)slice) / log2f(1.0f + kPktSliceFull);
+  if (bright < 0.0f) bright = 0.0f;
   if (bright > 100.0f) bright = 100.0f;
   const float lmx = log2f(1.0f + mx);
   pktRowHead = (pktRowHead + 1) % kPktGraphRows;
