@@ -159,7 +159,7 @@ void drawWardriveMap() {
   display.print(fix ? "Fix 3D" : "Fix --");
   display.setTextColor(kMuted, kBackground);
   display.setCursor(168, kWdmStatusY);
-  display.printf("Sats %u", (unsigned)gpsSatellites());
+  display.printf("Sats %u", (unsigned)gpsSats());
 
   drawThreeButtonFooter("Back", "Zoom", "Clear");
 }
