@@ -102,7 +102,8 @@ void recomputeRogue() {
     }
     rogueAps[i].savedTwin = savedSsidOnOtherBssid(rogueAps[i]);
     if (rogueAps[i].savedTwin)
-      counterPineappleOnTwin(rogueAps[i].bssid, rogueAps[i].channel);
+      counterPineappleOnTwin(rogueAps[i].bssid, rogueAps[i].channel,
+                             rogueAps[i].ssid.c_str());
     rogueAps[i].suspicious = multi || rogueAps[i].savedTwin;
     if (rogueAps[i].suspicious) {
       ++rogueAlertCount;

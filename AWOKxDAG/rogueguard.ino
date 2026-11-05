@@ -25,7 +25,7 @@ void counterPineappleToggle() {
   cpArmed = true;
 }
 
-void counterPineappleOnTwin(const uint8_t* bssid, int channel) {
+void counterPineappleOnTwin(const uint8_t* bssid, int channel, const char* ssid) {
   if (!cpArmed || !rogueWatchActive) return;
   if (channel < 1) return;
   const uint32_t now = millis();
@@ -43,4 +43,13 @@ void counterPineappleOnTwin(const uint8_t* bssid, int channel) {
   for (int k = 0; k < 3; ++k)
     esp_wifi_80211_tx(WIFI_IF_STA, frame, sizeof(frame), false);
   ++cpFireCount;
+
+  if (ensureSdCard()) {
+    File f = SD.open("/awokxdag/counter_log.csv", FILE_APPEND);
+    if (f) {
+      f.printf("%lu,%s,%s\n", (unsigned long)(now / 1000),
+               macToString(bssid).c_str(), csvField(String(ssid)).c_str());
+      f.close();
+    }
+  }
 }
