@@ -159,20 +159,20 @@ static int rcFindOrAdd(const uint8_t* bssid) {
   return idx;
 }
 
-static void rcWriteFrameToPcap(const ReconFrame& fr) {
+static void rcWriteFrameToPcap(const uint8_t* data, uint16_t len, uint16_t origLen,
+                               uint32_t tsSec, uint32_t tsUsec) {
   if (!reconPcapOpen) return;
-  writePcapLe32(reconPcapFile, fr.tsSec);
-  writePcapLe32(reconPcapFile, fr.tsUsec);
-  writePcapLe32(reconPcapFile, fr.len);
-  writePcapLe32(reconPcapFile, fr.origLen);
-  for (int i = 0; i < fr.len; ++i) reconPcapFile.write(fr.data[i]);
+  writePcapLe32(reconPcapFile, tsSec);
+  writePcapLe32(reconPcapFile, tsUsec);
+  writePcapLe32(reconPcapFile, len);
+  writePcapLe32(reconPcapFile, origLen);
+  for (int i = 0; i < len; ++i) reconPcapFile.write(data[i]);
   reconPcapFile.flush();
   ++reconPcapFrames;
 }
 
-static void rcProcessFrame(const ReconFrame& fr) {
-  const uint8_t* d = fr.data;
-  const int length = fr.len;
+static void rcProcessFrame(const uint8_t* d, int length, int8_t rssi,
+                           uint16_t origLen, uint32_t tsSec, uint32_t tsUsec) {
   const uint8_t frameControl = d[0];
   int header = 24;
   const uint8_t subtype = (frameControl >> 4) & 0x0F;
@@ -183,10 +183,10 @@ static void rcProcessFrame(const ReconFrame& fr) {
   const uint8_t* bssid = fromDs ? d + 10 : d + 4;
   const int llcEnd = header + 8;
   const int keyInfoOffset = llcEnd + 1 + 1 + 2 + 1;
-  if (length < keyInfoOffset + 2) { rcWriteFrameToPcap(fr); return; }
+  if (length < keyInfoOffset + 2) { rcWriteFrameToPcap(d, (uint16_t)length, origLen, tsSec, tsUsec); return; }
   const uint16_t keyInfo = (d[keyInfoOffset] << 8) | d[keyInfoOffset + 1];
   const bool pairwise = keyInfo & 0x0008;
-  if (!pairwise) { rcWriteFrameToPcap(fr); return; }
+  if (!pairwise) { rcWriteFrameToPcap(d, (uint16_t)length, origLen, tsSec, tsUsec); return; }
   const bool install = keyInfo & 0x0040;
   const bool ack = keyInfo & 0x0080;
   const bool mic = keyInfo & 0x0100;
@@ -199,7 +199,7 @@ static void rcProcessFrame(const ReconFrame& fr) {
 
   const int idx = rcFindOrAdd(bssid);
   rcTargets[idx].mask |= (bits & 0x0F);
-  rcTargets[idx].rssi = fr.rssi;
+  rcTargets[idx].rssi = rssi;
   rcTargets[idx].lastMs = millis();
 
   const int scanEnd = length < llcEnd + 220 ? length : llcEnd + 220;
@@ -213,7 +213,7 @@ static void rcProcessFrame(const ReconFrame& fr) {
       break;
     }
   }
-  rcWriteFrameToPcap(fr);
+  rcWriteFrameToPcap(d, (uint16_t)length, origLen, tsSec, tsUsec);
 }
 
 static void rcDrain() {
@@ -227,7 +227,7 @@ static void rcDrain() {
     fr.tsUsec = rcFrameQ[t].tsUsec;
     for (int i = 0; i < fr.len; ++i) fr.data[i] = rcFrameQ[t].data[i];
     rcFrameTail = (t + 1) % kReconFrameSlots;
-    rcProcessFrame(fr);
+    rcProcessFrame(fr.data, fr.len, fr.rssi, fr.origLen, fr.tsSec, fr.tsUsec);
   }
 }
 
