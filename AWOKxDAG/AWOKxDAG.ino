@@ -1801,7 +1801,8 @@ const ReconMenuItem kReconItems[] = {
     {"Harvester", "Passive EAPOL / PMKID grab", 3},
     {"Probe Intel", "Preferred-network probe leaks", 3},
     {"Fleet Hunter", "Multi-node RDF trilateration", 3},
-    {"Topology Map", "Client / AP association graph", 3}};
+    {"Topology Map", "Client / AP association graph", 3},
+    {"Wardrive Map", "GPS scatter of found networks", 2}};
 constexpr int kReconItemCount =
     static_cast<int>(sizeof(kReconItems) / sizeof(kReconItems[0]));
 
@@ -1886,6 +1887,8 @@ void launchReconItem(int index) {
     }
   } else if (label == "Topology Map") {
     startTopologyMap();
+  } else if (label == "Wardrive Map") {
+    startWardriveMap();
   } else if (label == "Wi-Fi 6 Intel") {
     startWifi6Intel();
   } else if (label == "Saved") {
@@ -2777,6 +2780,7 @@ void loop() {
   updateLocator();
   updateFleetHunt();
   updateTopologyMap();
+  updateWardriveMap();
   updateWps();
   updateRogueWatch();
   updateHiddenReveal();

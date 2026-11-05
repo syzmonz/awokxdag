@@ -312,6 +312,18 @@ void dispatchTouch(int x, int y) {
     return;
   }
   if (y < kFooterTop) return;
+  if (currentView == View::kWardriveMap) {
+    if (x < kScreenWidth / 3) {
+      drawReconMenu();
+    } else if (x < (kScreenWidth * 2) / 3) {
+      wardriveMapZoomCycle();
+      drawWardriveMap();
+    } else {
+      wardriveMapClear();
+      drawWardriveMap();
+    }
+    return;
+  }
   if (currentView == View::kPacketMon) {
     if (pktmonGraphActive()) {
       const int zone = x / (kScreenWidth / 4);

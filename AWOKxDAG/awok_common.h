@@ -132,7 +132,7 @@ constexpr uint8_t kDeauthHopChannels[] = {
 constexpr int kDeauthHopChannelCount =
     static_cast<int>(sizeof(kDeauthHopChannels) / sizeof(kDeauthHopChannels[0]));
 constexpr int kMaxDeauthTargets = 8;
-constexpr char kVersion[] = "1.7.8-syz.1";
+constexpr char kVersion[] = "1.7.8-syz.2";
 constexpr char kAuthor[] = "dag nazty";
 constexpr uint32_t kHandshakeRedrawMs = 500;
 constexpr uint32_t kHandshakePulseMs = 2000;
@@ -523,6 +523,7 @@ enum class View {
   kWardriveUploadFiles,
   kFleetHunt,
   kTopologyMap,
+  kWardriveMap,
   kBleIntel,
   kSpectrogram,
   kWifi6Intel,
@@ -952,6 +953,12 @@ String bytesToHex(const std::string& data, size_t maximumBytes = 16);
 void drawButton(int x, int y, int w, int h, const String& label,
                 uint16_t outline = kAccent);
 void drawHeader(const String& title, const String& detail = "");
+void wardriveMapCapture(float lat, float lon, uint8_t sec, int8_t rssi);
+void startWardriveMap();
+void drawWardriveMap();
+void updateWardriveMap();
+void wardriveMapZoomCycle();
+void wardriveMapClear();
 void logMemory(const char* stage);
 void showRadioError(const char* message);
 void shutdownWifi();

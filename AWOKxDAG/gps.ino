@@ -1055,6 +1055,13 @@ void updateWardrive() {
                             WiFi.encryptionType(i), WiFi.channel(i),
                             WiFi.RSSI(i));
           ++wardriveNetworks;
+          const wifi_auth_mode_t wdmAuth = WiFi.encryptionType(i);
+          uint8_t wdmSec = 3;
+          if (wdmAuth == WIFI_AUTH_OPEN) wdmSec = 0;
+          else if (wdmAuth == WIFI_AUTH_WEP) wdmSec = 1;
+          else if (wdmAuth == WIFI_AUTH_WPA_PSK) wdmSec = 2;
+          wardriveMapCapture((float)gps.location.lat(), (float)gps.location.lng(),
+                             wdmSec, (int8_t)WiFi.RSSI(i));
         }
       }
       WiFi.scanDelete();
