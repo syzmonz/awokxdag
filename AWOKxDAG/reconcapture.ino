@@ -1,9 +1,3 @@
-struct ReconEvt {
-  uint8_t bssid[6];
-  int8_t rssi;
-  uint8_t bits;
-};
-
 struct ReconTarget {
   uint8_t bssid[6];
   uint8_t mask;
@@ -12,7 +6,8 @@ struct ReconTarget {
   uint32_t lastMs;
 };
 
-constexpr int kReconEvtSlots = 48;
+constexpr int kReconSlotBytes = 256;
+constexpr int kReconFrameSlots = 24;
 constexpr int kReconMaxTargets = 10;
 constexpr int kReconVisibleRows = 5;
 constexpr uint32_t kReconHopMs = 300;
@@ -20,9 +15,18 @@ constexpr uint32_t kReconPulseMs = 2500;
 constexpr uint32_t kReconRedrawMs = 450;
 static const uint8_t kReconMultiChannels[] = {1, 6, 11};
 
-static volatile ReconEvt rcEvtQ[kReconEvtSlots];
-static volatile int rcEvtHead = 0;
-static volatile int rcEvtTail = 0;
+struct ReconFrame {
+  uint8_t data[kReconSlotBytes];
+  uint16_t len;
+  uint16_t origLen;
+  int8_t rssi;
+  uint32_t tsSec;
+  uint32_t tsUsec;
+};
+
+static volatile ReconFrame rcFrameQ[kReconFrameSlots];
+static volatile int rcFrameHead = 0;
+static volatile int rcFrameTail = 0;
 
 static ReconTarget rcTargets[kReconMaxTargets];
 static int rcTargetCount = 0;
@@ -33,6 +37,11 @@ static int rcHopIdx = 0;
 static uint32_t lastReconHopMs = 0;
 static uint32_t lastReconPulseMs = 0;
 static uint32_t lastReconDrawMs = 0;
+
+static File reconPcapFile;
+static bool reconPcapOpen = false;
+static uint32_t reconPcapFrames = 0;
+static uint32_t reconPmkidLines = 0;
 
 void reconCaptureCallback(void* buf, wifi_promiscuous_pkt_type_t type) {
   if (type != WIFI_PKT_DATA) return;
@@ -55,39 +64,78 @@ void reconCaptureCallback(void* buf, wifi_promiscuous_pkt_type_t type) {
         llc[6] == 0x88 && llc[7] == 0x8E))
     return;
 
-  const uint8_t* bssid = fromDs ? payload + 10 : payload + 4;
-  const int llcEnd = header + 8;
-  const int keyInfoOffset = llcEnd + 1 + 1 + 2 + 1;
-  if (length < keyInfoOffset + 2) return;
-  const uint16_t keyInfo = (payload[keyInfoOffset] << 8) | payload[keyInfoOffset + 1];
-  const bool pairwise = keyInfo & 0x0008;
-  if (!pairwise) return;
-  const bool install = keyInfo & 0x0040;
-  const bool ack = keyInfo & 0x0080;
-  const bool mic = keyInfo & 0x0100;
-  const bool secure = keyInfo & 0x0200;
-  uint8_t bits = 0;
-  if (ack && !mic && !install) bits = 0x01;
-  else if (mic && !ack && !secure) bits = 0x02;
-  else if (mic && ack && install) bits = 0x04;
-  else if (mic && secure && !ack) bits = 0x08;
+  const int next = (rcFrameHead + 1) % kReconFrameSlots;
+  if (next == rcFrameTail) return;
+  const int copyLen = length > kReconSlotBytes ? kReconSlotBytes : length;
+  for (int i = 0; i < copyLen; ++i) rcFrameQ[rcFrameHead].data[i] = payload[i];
+  rcFrameQ[rcFrameHead].len = (uint16_t)copyLen;
+  rcFrameQ[rcFrameHead].origLen = (uint16_t)length;
+  rcFrameQ[rcFrameHead].rssi = packet->rx_ctrl.rssi;
+  const uint32_t nowUs = micros();
+  rcFrameQ[rcFrameHead].tsSec = nowUs / 1000000UL;
+  rcFrameQ[rcFrameHead].tsUsec = nowUs % 1000000UL;
+  rcFrameHead = next;
+}
 
-  int scanEnd = length < llcEnd + 220 ? length : llcEnd + 220;
-  for (int i = llcEnd; i + 4 <= scanEnd; ++i) {
-    if (payload[i] == 0x00 && payload[i + 1] == 0x0F &&
-        payload[i + 2] == 0xAC && payload[i + 3] == 0x04) {
-      bits |= 0x10;
-      break;
+static void openReconPcap() {
+  reconPcapOpen = false;
+  reconPcapFrames = 0;
+  reconPmkidLines = 0;
+  if (!ensureSdCard()) return;
+  reconPcapFile = SD.open("/awokxdag/recon_capture.pcap", FILE_WRITE);
+  if (!reconPcapFile) return;
+  writePcapLe32(reconPcapFile, 0xA1B2C3D4);
+  writePcapLe16(reconPcapFile, 2);
+  writePcapLe16(reconPcapFile, 4);
+  writePcapLe32(reconPcapFile, 0);
+  writePcapLe32(reconPcapFile, 0);
+  writePcapLe32(reconPcapFile, kReconSlotBytes);
+  writePcapLe32(reconPcapFile, 105);
+  reconPcapFile.flush();
+  reconPcapOpen = true;
+}
+
+static void closeReconPcap() {
+  if (reconPcapOpen) {
+    reconPcapFile.close();
+    reconPcapOpen = false;
+  }
+}
+
+static void rcResolveSsid(const uint8_t* bssid, char* out, int outLen) {
+  uint8_t mac[6];
+  for (int i = 0; i < wifiCount; ++i) {
+    if (parseBssid(wifiEntries[i].bssid, mac)) {
+      bool same = true;
+      for (int j = 0; j < 6; ++j)
+        if (mac[j] != bssid[j]) { same = false; break; }
+      if (same && wifiEntries[i].ssid.length()) {
+        strncpy(out, wifiEntries[i].ssid.c_str(), outLen - 1);
+        out[outLen - 1] = 0;
+        return;
+      }
     }
   }
-  if (bits == 0) return;
+  snprintf(out, outLen, "%02X%02X%02X", bssid[3], bssid[4], bssid[5]);
+}
 
-  const int next = (rcEvtHead + 1) % kReconEvtSlots;
-  if (next == rcEvtTail) return;
-  for (int i = 0; i < 6; ++i) rcEvtQ[rcEvtHead].bssid[i] = bssid[i];
-  rcEvtQ[rcEvtHead].rssi = packet->rx_ctrl.rssi;
-  rcEvtQ[rcEvtHead].bits = bits;
-  rcEvtHead = next;
+static void writeReconPmkid(const uint8_t* ap, const uint8_t* sta, const uint8_t* pmkid) {
+  if (!ensureSdCard()) return;
+  File f = SD.open("/awokxdag/recon_pmkid.txt", FILE_APPEND);
+  if (!f) return;
+  char ssid[34];
+  rcResolveSsid(ap, ssid, sizeof(ssid));
+  f.print("WPA*01*");
+  for (int i = 0; i < 16; ++i) f.printf("%02x", pmkid[i]);
+  f.print('*');
+  for (int i = 0; i < 6; ++i) f.printf("%02x", ap[i]);
+  f.print('*');
+  for (int i = 0; i < 6; ++i) f.printf("%02x", sta[i]);
+  f.print('*');
+  for (size_t i = 0; ssid[i]; ++i) f.printf("%02x", (uint8_t)ssid[i]);
+  f.println("***");
+  f.close();
+  ++reconPmkidLines;
 }
 
 static int rcFindOrAdd(const uint8_t* bssid) {
@@ -111,37 +159,76 @@ static int rcFindOrAdd(const uint8_t* bssid) {
   return idx;
 }
 
-static void rcDrain() {
-  while (rcEvtTail != rcEvtHead) {
-    const int t = rcEvtTail;
-    uint8_t b[6];
-    for (int j = 0; j < 6; ++j) b[j] = rcEvtQ[t].bssid[j];
-    const int8_t rssi = rcEvtQ[t].rssi;
-    const uint8_t bits = rcEvtQ[t].bits;
-    rcEvtTail = (t + 1) % kReconEvtSlots;
-    const int idx = rcFindOrAdd(b);
-    rcTargets[idx].mask |= (bits & 0x0F);
-    if (bits & 0x10) rcTargets[idx].pmkid = true;
-    rcTargets[idx].rssi = rssi;
-    rcTargets[idx].lastMs = millis();
-  }
+static void rcWriteFrameToPcap(const ReconFrame& fr) {
+  if (!reconPcapOpen) return;
+  writePcapLe32(reconPcapFile, fr.tsSec);
+  writePcapLe32(reconPcapFile, fr.tsUsec);
+  writePcapLe32(reconPcapFile, fr.len);
+  writePcapLe32(reconPcapFile, fr.origLen);
+  for (int i = 0; i < fr.len; ++i) reconPcapFile.write(fr.data[i]);
+  reconPcapFile.flush();
+  ++reconPcapFrames;
 }
 
-static void rcResolveSsid(const uint8_t* bssid, char* out, int outLen) {
-  uint8_t mac[6];
-  for (int i = 0; i < wifiCount; ++i) {
-    if (parseBssid(wifiEntries[i].bssid, mac)) {
-      bool same = true;
-      for (int j = 0; j < 6; ++j)
-        if (mac[j] != bssid[j]) { same = false; break; }
-      if (same && wifiEntries[i].ssid.length()) {
-        strncpy(out, wifiEntries[i].ssid.c_str(), outLen - 1);
-        out[outLen - 1] = 0;
-        return;
+static void rcProcessFrame(const ReconFrame& fr) {
+  const uint8_t* d = fr.data;
+  const int length = fr.len;
+  const uint8_t frameControl = d[0];
+  int header = 24;
+  const uint8_t subtype = (frameControl >> 4) & 0x0F;
+  if (subtype & 0x08) header += 2;
+  const uint8_t frameControl1 = d[1];
+  const bool fromDs = frameControl1 & 0x02;
+  if ((frameControl1 & 0x03) == 0x03) header += 6;
+  const uint8_t* bssid = fromDs ? d + 10 : d + 4;
+  const int llcEnd = header + 8;
+  const int keyInfoOffset = llcEnd + 1 + 1 + 2 + 1;
+  if (length < keyInfoOffset + 2) { rcWriteFrameToPcap(fr); return; }
+  const uint16_t keyInfo = (d[keyInfoOffset] << 8) | d[keyInfoOffset + 1];
+  const bool pairwise = keyInfo & 0x0008;
+  if (!pairwise) { rcWriteFrameToPcap(fr); return; }
+  const bool install = keyInfo & 0x0040;
+  const bool ack = keyInfo & 0x0080;
+  const bool mic = keyInfo & 0x0100;
+  const bool secure = keyInfo & 0x0200;
+  uint8_t bits = 0;
+  if (ack && !mic && !install) bits = 0x01;
+  else if (mic && !ack && !secure) bits = 0x02;
+  else if (mic && ack && install) bits = 0x04;
+  else if (mic && secure && !ack) bits = 0x08;
+
+  const int idx = rcFindOrAdd(bssid);
+  rcTargets[idx].mask |= (bits & 0x0F);
+  rcTargets[idx].rssi = fr.rssi;
+  rcTargets[idx].lastMs = millis();
+
+  const int scanEnd = length < llcEnd + 220 ? length : llcEnd + 220;
+  for (int i = llcEnd; i + 20 <= scanEnd; ++i) {
+    if (d[i] == 0x00 && d[i + 1] == 0x0F && d[i + 2] == 0xAC && d[i + 3] == 0x04) {
+      if (!rcTargets[idx].pmkid) {
+        const uint8_t* sta = fromDs ? d + 4 : d + 10;
+        writeReconPmkid(bssid, sta, d + i + 4);
       }
+      rcTargets[idx].pmkid = true;
+      break;
     }
   }
-  snprintf(out, outLen, "%02X%02X%02X", bssid[3], bssid[4], bssid[5]);
+  rcWriteFrameToPcap(fr);
+}
+
+static void rcDrain() {
+  while (rcFrameTail != rcFrameHead) {
+    const int t = rcFrameTail;
+    ReconFrame fr;
+    fr.len = rcFrameQ[t].len;
+    fr.origLen = rcFrameQ[t].origLen;
+    fr.rssi = rcFrameQ[t].rssi;
+    fr.tsSec = rcFrameQ[t].tsSec;
+    fr.tsUsec = rcFrameQ[t].tsUsec;
+    for (int i = 0; i < fr.len; ++i) fr.data[i] = rcFrameQ[t].data[i];
+    rcFrameTail = (t + 1) % kReconFrameSlots;
+    rcProcessFrame(fr);
+  }
 }
 
 static void rcSendPulse() {
@@ -162,7 +249,9 @@ static const char* rcModeLabel(int m) {
 void drawReconCapture() {
   currentView = View::kReconCapture;
   display.fillScreen(kBackground);
-  drawHeader("RECON", rcActive ? "capturing" : "idle");
+  char sub[22];
+  snprintf(sub, sizeof(sub), "saved %lu", (unsigned long)reconPcapFrames);
+  drawHeader("RECON", rcActive ? sub : "idle");
 
   const int pillY = 46;
   const int pillW = 74;
@@ -235,8 +324,8 @@ void reconCaptureTogglePulse() {
 void startReconCapture() {
   if (!stopActiveTools()) return;
   rcTargetCount = 0;
-  rcEvtHead = 0;
-  rcEvtTail = 0;
+  rcFrameHead = 0;
+  rcFrameTail = 0;
   rcMode = 0;
   rcPulse = false;
   rcHopIdx = 0;
@@ -244,6 +333,7 @@ void startReconCapture() {
   lastReconPulseMs = millis();
   lastReconDrawMs = 0;
   signalMonitorActive = false;
+  openReconPcap();
 
   WiFi.disconnect(true, false);
   WiFi.mode(WIFI_MODE_STA);
@@ -266,6 +356,7 @@ void stopReconCapture() {
   rcPulse = false;
   esp_wifi_set_promiscuous(false);
   esp_wifi_set_promiscuous_rx_cb(nullptr);
+  closeReconPcap();
 }
 
 void updateReconCapture() {
