@@ -8,14 +8,50 @@ enum GearType {
 constexpr uint16_t kGearPwnColor = 0xF81F;
 constexpr uint16_t kGearMarauderColor = 0x07FF;
 constexpr uint16_t kGearFlipperColor = 0xFC00;
+constexpr uint32_t kGearSweepDwellMs = 180;
+static const uint8_t kPwnagotchiMac[6] = {0xDE, 0xAD, 0xBE, 0xEF, 0xDE, 0xAD};
 
 static int gearCounts[4] = {0, 0, 0, 0};
 static int gearTotalSeen = 0;
 static int gearClosestRssi = -127;
 static uint8_t gearClosestType = kGearNone;
 static uint8_t gearFilter = kGearNone;
+static volatile int gearPwnBeacons = 0;
+static volatile int8_t gearPwnRssi = -127;
 
-static uint8_t gearClassify(const BleEntry& e) {
+void gearWifiCallback(void* buf, wifi_promiscuous_pkt_type_t type) {
+  if (type != WIFI_PKT_MGMT) return;
+  const wifi_promiscuous_pkt_t* packet = static_cast<const wifi_promiscuous_pkt_t*>(buf);
+  const uint8_t* payload = packet->payload;
+  if (packet->rx_ctrl.sig_len < 22) return;
+  if (payload[0] != 0x80) return;
+  for (int i = 0; i < 6; ++i)
+    if (payload[10 + i] != kPwnagotchiMac[i]) return;
+  ++gearPwnBeacons;
+  if (packet->rx_ctrl.rssi > gearPwnRssi) gearPwnRssi = packet->rx_ctrl.rssi;
+}
+
+static void gearWifiSweep() {
+  gearPwnBeacons = 0;
+  gearPwnRssi = -127;
+  WiFi.disconnect(true, false);
+  WiFi.mode(WIFI_MODE_STA);
+  esp_wifi_set_ps(WIFI_PS_NONE);
+  esp_wifi_set_promiscuous(false);
+  wifi_promiscuous_filter_t filter = {};
+  filter.filter_mask = WIFI_PROMIS_FILTER_MASK_MGMT;
+  esp_wifi_set_promiscuous_filter(&filter);
+  esp_wifi_set_promiscuous_rx_cb(&gearWifiCallback);
+  esp_wifi_set_promiscuous(true);
+  for (int c = 0; c < kDeauthHopChannelCount; ++c) {
+    esp_wifi_set_channel(kDeauthHopChannels[c], WIFI_SECOND_CHAN_NONE);
+    delay(kGearSweepDwellMs);
+  }
+  esp_wifi_set_promiscuous(false);
+  esp_wifi_set_promiscuous_rx_cb(nullptr);
+}
+
+static uint8_t gearClassifyBle(const BleEntry& e) {
   if (e.flipperLike) return kGearFlipper;
   String n = e.name;
   n.toLowerCase();
@@ -47,8 +83,18 @@ static void gearRecompute() {
   gearTotalSeen = 0;
   gearClosestRssi = -127;
   gearClosestType = kGearNone;
+
+  gearCounts[kGearPwnagotchi] = gearPwnBeacons;
+  gearTotalSeen += gearPwnBeacons;
+  if (gearPwnBeacons > 0 &&
+      (gearFilter == kGearNone || gearFilter == kGearPwnagotchi) &&
+      (int)gearPwnRssi > gearClosestRssi) {
+    gearClosestRssi = (int)gearPwnRssi;
+    gearClosestType = kGearPwnagotchi;
+  }
+
   for (int i = 0; i < bleCount; ++i) {
-    const uint8_t t = gearClassify(bleEntries[i]);
+    const uint8_t t = gearClassifyBle(bleEntries[i]);
     if (t == kGearNone) continue;
     ++gearCounts[t];
     ++gearTotalSeen;
@@ -76,9 +122,9 @@ static void gearTile(int x, int y, const char* name, int count, uint16_t color) 
 void drawGearSniff() {
   currentView = View::kGearSniff;
   display.fillScreen(kBackground);
-  char sub[16];
+  char sub[18];
   snprintf(sub, sizeof(sub), "filter %s", gearLabel(gearFilter));
-  drawHeader("GEAR SNIFF", gearFilter == kGearNone ? "all gear" : sub);
+  drawHeader("GEAR SNIFF", gearFilter == kGearNone ? "wifi + ble" : sub);
 
   gearTile(8, 52, "PWNAGOTCHI", gearCounts[kGearPwnagotchi], kGearPwnColor);
   gearTile(124, 52, "MARAUDER", gearCounts[kGearMarauder], kGearMarauderColor);
@@ -124,6 +170,7 @@ void gearSniffTouch(int x) {
   if (x < kScreenWidth / 3) {
     drawReconMenu();
   } else if (x < (kScreenWidth * 2) / 3) {
+    gearWifiSweep();
     scanBle();
     gearRecompute();
     drawGearSniff();
