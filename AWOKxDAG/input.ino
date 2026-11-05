@@ -324,6 +324,22 @@ void dispatchTouch(int x, int y) {
     }
     return;
   }
+  if (currentView == View::kReconCapture) {
+    reconCaptureTouch(x);
+    return;
+  }
+  if (currentView == View::kDeviceId) {
+    deviceIdTouch(x);
+    return;
+  }
+  if (currentView == View::kDeauthRate) {
+    deauthRateTouch(x);
+    return;
+  }
+  if (currentView == View::kGearSniff) {
+    gearSniffTouch(x);
+    return;
+  }
   if (currentView == View::kPacketMon) {
     if (pktmonGraphActive()) {
       const int zone = x / (kScreenWidth / 4);
@@ -384,8 +400,15 @@ void dispatchTouch(int x, int y) {
     return;
   }
   if (currentView == View::kRogueWatch) {
-    returnToMonitor(1);
-    if (x >= kScreenWidth / 2) drawHome();
+    if (x < kScreenWidth / 3) {
+      returnToMonitor(1);
+    } else if (x < (kScreenWidth * 2) / 3) {
+      counterPineappleToggle();
+      drawRogueWatch();
+    } else {
+      returnToMonitor(1);
+      drawHome();
+    }
     return;
   }
   if (currentView == View::kHiddenReveal) {

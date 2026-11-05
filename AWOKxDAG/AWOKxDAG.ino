@@ -1802,7 +1802,11 @@ const ReconMenuItem kReconItems[] = {
     {"Probe Intel", "Preferred-network probe leaks", 3},
     {"Fleet Hunter", "Multi-node RDF trilateration", 3},
     {"Topology Map", "Client / AP association graph", 3},
-    {"Wardrive Map", "GPS scatter of found networks", 2}};
+    {"Wardrive Map", "GPS scatter of found networks", 2},
+    {"Recon Capture", "Multi-target EAPOL / PMKID grab", 3},
+    {"Device ID", "Fingerprint devices across MAC rand", 3},
+    {"Deauth Detect", "Incoming deauth rate + alarm", 3},
+    {"Gear Sniff", "Flag pwnagotchi / Marauder / Flipper", 1}};
 constexpr int kReconItemCount =
     static_cast<int>(sizeof(kReconItems) / sizeof(kReconItems[0]));
 
@@ -1889,6 +1893,14 @@ void launchReconItem(int index) {
     startTopologyMap();
   } else if (label == "Wardrive Map") {
     startWardriveMap();
+  } else if (label == "Recon Capture") {
+    startReconCapture();
+  } else if (label == "Device ID") {
+    startDeviceId();
+  } else if (label == "Deauth Detect") {
+    startDeauthRate();
+  } else if (label == "Gear Sniff") {
+    startGearSniff();
   } else if (label == "Wi-Fi 6 Intel") {
     startWifi6Intel();
   } else if (label == "Saved") {
@@ -2781,6 +2793,10 @@ void loop() {
   updateFleetHunt();
   updateTopologyMap();
   updateWardriveMap();
+  updateReconCapture();
+  updateDeviceId();
+  updateDeauthRate();
+  updateGearSniff();
   updateWps();
   updateRogueWatch();
   updateHiddenReveal();

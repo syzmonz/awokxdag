@@ -101,6 +101,8 @@ void recomputeRogue() {
       }
     }
     rogueAps[i].savedTwin = savedSsidOnOtherBssid(rogueAps[i]);
+    if (rogueAps[i].savedTwin)
+      counterPineappleOnTwin(rogueAps[i].bssid, rogueAps[i].channel);
     rogueAps[i].suspicious = multi || rogueAps[i].savedTwin;
     if (rogueAps[i].suspicious) {
       ++rogueAlertCount;
@@ -143,6 +145,12 @@ void drawRogueWatch() {
   display.setCursor(6, 78);
   display.printf("%d AP(s) seen | %d alert(s) | ch %d", rogueApCount,
                  rogueAlertCount, kDeauthHopChannels[rogueHopIndex]);
+  if (counterPineappleArmed()) {
+    display.setTextColor(kBad, kBackground);
+    display.setCursor(6, 88);
+    display.printf("COUNTER ARMED | twin-only | %lu fired",
+                   (unsigned long)counterPineappleFires());
+  }
 
   int row = 0;
   for (int i = 0; i < rogueApCount && row < 8; ++i) {
@@ -164,10 +172,12 @@ void drawRogueWatch() {
     display.setCursor(6, 110);
     display.print("No SSID seen on two BSSIDs yet.");
   }
-  drawFooter(rogueWatchActive ? "Stop" : "Back", "Home");
+  drawThreeButtonFooter(rogueWatchActive ? "Stop" : "Back",
+                        counterPineappleArmed() ? "ARMED" : "Arm", "Home");
 }
 
 void startRogueWatch() {
+  counterPineappleDisarm();
   rogueApCount = 0;
   rogueAlertCount = 0;
   rogueHead = 0;

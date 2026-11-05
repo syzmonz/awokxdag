@@ -132,7 +132,7 @@ constexpr uint8_t kDeauthHopChannels[] = {
 constexpr int kDeauthHopChannelCount =
     static_cast<int>(sizeof(kDeauthHopChannels) / sizeof(kDeauthHopChannels[0]));
 constexpr int kMaxDeauthTargets = 8;
-constexpr char kVersion[] = "1.7.8-syz.2";
+constexpr char kVersion[] = "1.7.8-syz.3";
 constexpr char kAuthor[] = "dag nazty";
 constexpr uint32_t kHandshakeRedrawMs = 500;
 constexpr uint32_t kHandshakePulseMs = 2000;
@@ -527,7 +527,11 @@ enum class View {
   kBleIntel,
   kSpectrogram,
   kWifi6Intel,
-  kDeauthForensics
+  kDeauthForensics,
+  kDeauthRate,
+  kGearSniff,
+  kReconCapture,
+  kDeviceId
 };
 
 // ---- Link Mode (ESP-NOW pairing of two AxD units) -----------------------
@@ -959,6 +963,32 @@ void drawWardriveMap();
 void updateWardriveMap();
 void wardriveMapZoomCycle();
 void wardriveMapClear();
+void startDeauthRate();
+void drawDeauthRate();
+void updateDeauthRate();
+void deauthRateTouch(int x);
+void startGearSniff();
+void drawGearSniff();
+void updateGearSniff();
+void gearSniffTouch(int x);
+void startReconCapture();
+void drawReconCapture();
+void updateReconCapture();
+void reconCaptureCycleMode();
+void reconCaptureTogglePulse();
+void reconCaptureTouch(int x);
+void stopReconCapture();
+void startDeviceId();
+void drawDeviceId();
+void updateDeviceId();
+uint16_t deviceClusterFor(const uint8_t* mac);
+void deviceIdTouch(int x);
+void stopDeviceId();
+bool counterPineappleArmed();
+uint32_t counterPineappleFires();
+void counterPineappleToggle();
+void counterPineappleDisarm();
+void counterPineappleOnTwin(const uint8_t* bssid, int channel);
 void logMemory(const char* stage);
 void showRadioError(const char* message);
 void shutdownWifi();
