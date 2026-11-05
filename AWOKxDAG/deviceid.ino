@@ -40,6 +40,7 @@ static MacCluster macRing[kMacRingSlots];
 static int macRingFill = 0;
 static int macRingHead = 0;
 static uint32_t totalProbes = 0;
+static uint32_t fpEvictions = 0;
 static bool deviceIdActive = false;
 static int deviceIdHopIdx = 0;
 static uint32_t lastDeviceIdHopMs = 0;
@@ -86,6 +87,7 @@ static int fpFindOrAddCluster(uint32_t fp) {
   for (int i = 0; i < clusterCount; ++i)
     if (clusters[i].fp == fp) return i;
   if (clusterCount >= kMaxClusters) {
+    ++fpEvictions;
     int oldest = 0;
     for (int i = 1; i < clusterCount; ++i)
       if (clusters[i].lastMs < clusters[oldest].lastMs) oldest = i;
@@ -151,13 +153,24 @@ void drawDeviceId() {
   display.fillScreen(kBackground);
   drawHeader("DEVICE ID", deviceIdActive ? "fingerprinting" : "idle");
 
+  int confirmed = 0;
+  for (int i = 0; i < clusterCount; ++i)
+    if (clusters[i].macCount >= 2) ++confirmed;
+
   display.setTextSize(1);
-  display.setTextColor(kAccent, kBackground);
+  display.setTextColor(kGood, kBackground);
   display.setCursor(8, 48);
-  display.printf("~%d devices", clusterCount);
+  display.printf("%d conf", confirmed);
   display.setTextColor(kMuted, kBackground);
-  display.setCursor(120, 48);
-  display.printf("%lu probes", (unsigned long)totalProbes);
+  display.setCursor(74, 48);
+  display.printf("%d seen", clusterCount);
+  display.setCursor(148, 48);
+  display.printf("%lu pr", (unsigned long)totalProbes);
+  if (fpEvictions > 0) {
+    display.setTextColor(kWarn, kBackground);
+    display.setCursor(196, 48);
+    display.printf("ev%lu", (unsigned long)fpEvictions);
+  }
 
   display.drawFastHLine(0, 62, kScreenWidth, 0x18E3);
 
@@ -209,6 +222,7 @@ void startDeviceId() {
   macRingFill = 0;
   macRingHead = 0;
   totalProbes = 0;
+  fpEvictions = 0;
   fpEvtHead = 0;
   fpEvtTail = 0;
   deviceIdHopIdx = 0;
@@ -263,6 +277,7 @@ void deviceIdTouch(int x) {
     macRingFill = 0;
     macRingHead = 0;
     totalProbes = 0;
+    fpEvictions = 0;
     drawDeviceId();
   }
 }
