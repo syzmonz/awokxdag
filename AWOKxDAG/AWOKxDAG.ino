@@ -1806,7 +1806,8 @@ const ReconMenuItem kReconItems[] = {
     {"Recon Capture", "Multi-target EAPOL / PMKID grab", 3},
     {"Device ID", "Fingerprint devices across MAC rand", 3},
     {"Deauth Detect", "Incoming deauth rate + alarm", 3},
-    {"Gear Sniff", "Flag pwnagotchi / Marauder / Flipper", 1}};
+    {"Gear Sniff", "Flag pwnagotchi / Marauder / Flipper", 1},
+    {"BLE ID", "Cluster BLE devices across MAC rand", 1}};
 constexpr int kReconItemCount =
     static_cast<int>(sizeof(kReconItems) / sizeof(kReconItems[0]));
 
@@ -1901,6 +1902,8 @@ void launchReconItem(int index) {
     startDeauthRate();
   } else if (label == "Gear Sniff") {
     startGearSniff();
+  } else if (label == "BLE ID") {
+    startBleId();
   } else if (label == "Wi-Fi 6 Intel") {
     startWifi6Intel();
   } else if (label == "Saved") {
@@ -2797,6 +2800,7 @@ void loop() {
   updateDeviceId();
   updateDeauthRate();
   updateGearSniff();
+  updateBleId();
   updateWps();
   updateRogueWatch();
   updateHiddenReveal();

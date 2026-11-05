@@ -132,7 +132,7 @@ constexpr uint8_t kDeauthHopChannels[] = {
 constexpr int kDeauthHopChannelCount =
     static_cast<int>(sizeof(kDeauthHopChannels) / sizeof(kDeauthHopChannels[0]));
 constexpr int kMaxDeauthTargets = 8;
-constexpr char kVersion[] = "1.7.8-pre.2";
+constexpr char kVersion[] = "1.7.8-pre.3";
 constexpr char kAuthor[] = "dag nazty";
 constexpr uint32_t kHandshakeRedrawMs = 500;
 constexpr uint32_t kHandshakePulseMs = 2000;
@@ -531,7 +531,8 @@ enum class View {
   kDeauthRate,
   kGearSniff,
   kReconCapture,
-  kDeviceId
+  kDeviceId,
+  kBleId
 };
 
 // ---- Link Mode (ESP-NOW pairing of two AxD units) -----------------------
@@ -988,7 +989,12 @@ bool counterPineappleArmed();
 uint32_t counterPineappleFires();
 void counterPineappleToggle();
 void counterPineappleDisarm();
-void counterPineappleOnTwin(const uint8_t* bssid, int channel);
+void counterPineappleOnTwin(const uint8_t* bssid, int channel, const char* ssid);
+void startBleId();
+void drawBleId();
+void updateBleId();
+void bleIdTouch(int x);
+uint16_t bleClusterFor(const char* addr);
 void logMemory(const char* stage);
 void showRadioError(const char* message);
 void shutdownWifi();

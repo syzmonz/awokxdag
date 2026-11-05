@@ -340,6 +340,10 @@ void dispatchTouch(int x, int y) {
     gearSniffTouch(x);
     return;
   }
+  if (currentView == View::kBleId) {
+    bleIdTouch(x);
+    return;
+  }
   if (currentView == View::kPacketMon) {
     if (pktmonGraphActive()) {
       const int zone = x / (kScreenWidth / 4);
