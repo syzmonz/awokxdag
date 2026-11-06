@@ -1550,7 +1550,7 @@ void drawWifiAudit() {
   }
   drawFiveButtonFooter("Back", "Signal",
                        isSaved(selectedWifi) ? "Remove" : "Save", "Deauth",
-                       "Grab");
+                       "Recon");
 }
 
 // One-tap handshake audit: target the selected AP and jump straight into the

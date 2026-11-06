@@ -132,7 +132,7 @@ constexpr uint8_t kDeauthHopChannels[] = {
 constexpr int kDeauthHopChannelCount =
     static_cast<int>(sizeof(kDeauthHopChannels) / sizeof(kDeauthHopChannels[0]));
 constexpr int kMaxDeauthTargets = 8;
-constexpr char kVersion[] = "1.7.8-pre.5";
+constexpr char kVersion[] = "1.7.8-pre.6";
 constexpr char kAuthor[] = "dag nazty";
 constexpr uint32_t kHandshakeRedrawMs = 500;
 constexpr uint32_t kHandshakePulseMs = 2000;
@@ -977,6 +977,7 @@ void drawGearSniff();
 void updateGearSniff();
 void gearSniffTouch(int x);
 void startReconCapture();
+void startReconCaptureTargeted(const WifiEntry& ap);
 void drawReconCapture();
 void updateReconCapture();
 void reconCaptureCycleMode();

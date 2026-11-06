@@ -795,7 +795,7 @@ void dispatchTouch(int x, int y) {
     } else if (x < 96) {
       beginWifiSignalMonitor();
     } else if (x >= 192) {
-      grabHandshake();
+      startReconCaptureTargeted(selectedWifi);
     } else if (x >= 144) {
       openDeauthAttackSingle();
     } else {

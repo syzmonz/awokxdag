@@ -41,6 +41,7 @@ static uint32_t lastReconHopMs = 0;
 static uint32_t lastReconPulseMs = 0;
 static uint32_t lastReconDrawMs = 0;
 static uint32_t rcHintUntilMs = 0;
+static bool rcReturnToAudit = false;
 
 static File reconPcapFile;
 static bool reconPcapOpen = false;
@@ -368,6 +369,7 @@ void startReconCapture() {
   rcTargetCount = 0;
   rcSelected = -1;
   rcHintUntilMs = 0;
+  rcReturnToAudit = false;
   rcFrameHead = 0;
   rcFrameTail = 0;
   rcMode = 0;
@@ -391,6 +393,26 @@ void startReconCapture() {
   esp_wifi_set_channel(kDeauthHopChannels[0], WIFI_SECOND_CHAN_NONE);
   rcActive = true;
   currentView = View::kReconCapture;
+  drawReconCapture();
+}
+
+void startReconCaptureTargeted(const WifiEntry& ap) {
+  startReconCapture();
+  uint8_t bssid[6];
+  if (parseBssid(ap.bssid, bssid)) {
+    rcTargetCount = 1;
+    for (int j = 0; j < 6; ++j) rcTargets[0].bssid[j] = bssid[j];
+    rcTargets[0].mask = 0;
+    rcTargets[0].pmkid = false;
+    rcTargets[0].rssi = (int8_t)ap.rssi;
+    rcTargets[0].channel = (uint8_t)ap.channel;
+    rcTargets[0].lastMs = millis();
+    rcSelected = 0;
+    rcMode = 1;
+    if (ap.channel >= 1 && ap.channel <= 177)
+      esp_wifi_set_channel((uint8_t)ap.channel, WIFI_SECOND_CHAN_NONE);
+  }
+  rcReturnToAudit = true;
   drawReconCapture();
 }
 
@@ -445,6 +467,11 @@ void reconCaptureTouch(int x) {
     drawReconCapture();
   } else {
     stopReconCapture();
-    drawReconMenu();
+    if (rcReturnToAudit) {
+      rcReturnToAudit = false;
+      drawWifiAudit();
+    } else {
+      drawReconMenu();
+    }
   }
 }
