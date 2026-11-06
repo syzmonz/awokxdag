@@ -313,15 +313,7 @@ void dispatchTouch(int x, int y) {
   }
   if (y < kFooterTop) return;
   if (currentView == View::kWardriveMap) {
-    if (x < kScreenWidth / 3) {
-      drawReconMenu();
-    } else if (x < (kScreenWidth * 2) / 3) {
-      wardriveMapZoomCycle();
-      drawWardriveMap();
-    } else {
-      wardriveMapClear();
-      drawWardriveMap();
-    }
+    wardriveMapTouch(x);
     return;
   }
   if (currentView == View::kReconCapture) {
@@ -929,6 +921,7 @@ bool stopActiveTools() {
   if (rogueWatchActive) stopRogueWatch();
   if (hiddenRevealActive) stopHiddenReveal();
   if (cameraActive) stopCameraScan();
+  if (gearActive) stopGearSniff();
   if (bleDetectActive) stopBleDetect();
   if (probeLureActive) stopProbeLure();
   if (securityAuditActive) stopSecurityAudit();

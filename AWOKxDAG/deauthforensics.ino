@@ -139,9 +139,10 @@ static void deauthStreamTelemetry(const DeauthForensicEvent& ev) {
            ev.seqJump,
            ev.rssi,
            ev.channel);
-  Serial.println(telem);
+  const int telemLen = (int)strlen(telem);
+  if (Serial.availableForWrite() >= telemLen + 2) Serial.println(telem);
 #ifdef AWOK_HEADLESS
-  bridgeNotifyResult(kSourceDeauthForensics, reinterpret_cast<const uint8_t*>(telem), strlen(telem));
+  bridgeNotifyResult(kSourceDeauthForensics, reinterpret_cast<const uint8_t*>(telem), telemLen);
 #endif
 }
 

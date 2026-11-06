@@ -26,6 +26,7 @@ static int wdmZoomIdx = 0;
 static float wdmCentreLat = 0.0f;
 static float wdmCentreLon = 0.0f;
 static bool wdmHaveCentre = false;
+static bool wdmStartedWardrive = false;
 static uint32_t lastWdmDrawMs = 0;
 
 void wardriveMapCapture(float lat, float lon, uint8_t sec, int8_t rssi) {
@@ -77,7 +78,9 @@ void drawWardriveMap() {
     wdmHaveCentre = true;
   }
 
-  drawHeader("WARDRIVE MAP", fix ? "fix 3D" : "fix --");
+  drawHeader("WARDRIVE MAP",
+             wardriveActive ? (fix ? "logging | 3D fix" : "logging | no fix")
+                            : (fix ? "fix 3D" : "fix --"));
 
   for (int gx = 40; gx < kScreenWidth; gx += 40)
     display.drawFastVLine(gx, kWdmMapTop, kWdmMapBottom - kWdmMapTop, 0x1082);
@@ -89,8 +92,8 @@ void drawWardriveMap() {
     display.setTextSize(1);
     display.setCursor(56, kWdmCy - 12);
     display.print("No points yet");
-    display.setCursor(40, kWdmCy + 4);
-    display.print("Start Wardrive to log");
+    display.setCursor(28, kWdmCy + 4);
+    display.print(wardriveActive ? "Acquiring GPS fix / nets" : "Start Wardrive to log");
     drawThreeButtonFooter("Back", "Zoom", "Clear");
     return;
   }
@@ -175,5 +178,27 @@ void updateWardriveMap() {
 void startWardriveMap() {
   wdmZoomIdx = 0;
   lastWdmDrawMs = 0;
+  wdmStartedWardrive = false;
+  if (!wardriveActive) {
+    startWardrive();
+    wdmStartedWardrive = wardriveActive;
+  }
+  currentView = View::kWardriveMap;
   drawWardriveMap();
+}
+
+void wardriveMapTouch(int x) {
+  if (x < kScreenWidth / 3) {
+    if (wdmStartedWardrive) {
+      stopWardrive();
+      wdmStartedWardrive = false;
+    }
+    drawReconMenu();
+  } else if (x < (kScreenWidth * 2) / 3) {
+    wardriveMapZoomCycle();
+    drawWardriveMap();
+  } else {
+    wardriveMapClear();
+    drawWardriveMap();
+  }
 }

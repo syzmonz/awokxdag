@@ -3,6 +3,9 @@ constexpr uint32_t kDeauthRateRedrawMs = 400;
 constexpr int kDrTop = kHeaderHeight;
 constexpr int kDrGraphTop = 150;
 constexpr int kDrGraphBottom = 256;
+constexpr uint16_t kDrFillCold = 0x0A6B;
+constexpr uint16_t kDrFillHot = 0x3041;
+constexpr uint16_t kDrMarker = 0xFC00;
 
 static uint8_t drRate[kDeauthRateSamples];
 static int drFill = 0;
@@ -58,7 +61,12 @@ void drawDeauthRate() {
   display.setCursor(132, 78);
   display.printf("total %lu", (unsigned long)deauthTotalFrames);
   display.setCursor(132, 92);
-  display.printf("src %d", deauthApSeqCount);
+  if (deauthEventCount > 0 && (bool)deauthEvents) {
+    const uint8_t* s = deauthEvents[0].sourceMac;
+    display.printf("src %02X:%02X:%02X", s[3], s[4], s[5]);
+  } else {
+    display.print("src --");
+  }
 
   const int gh = kDrGraphBottom - kDrGraphTop;
   uint16_t scale = drPeak;
@@ -66,25 +74,46 @@ void drawDeauthRate() {
   if (scale < 5) scale = 5;
   scale = (uint16_t)(scale + scale / 3);
 
+  const uint16_t fillCol = alarm ? kDrFillHot : kDrFillCold;
+  if (drFill >= 2) {
+    for (int x = 0; x < kScreenWidth; ++x) {
+      const float p = (float)x / (float)(kScreenWidth - 1) * (float)(drFill - 1);
+      int i0 = (int)p;
+      int i1 = (i0 + 1 < drFill) ? i0 + 1 : i0;
+      const float frac = p - (float)i0;
+      const int idx0 = (drHead - drFill + i0 + kDeauthRateSamples * 2) % kDeauthRateSamples;
+      const int idx1 = (drHead - drFill + i1 + kDeauthRateSamples * 2) % kDeauthRateSamples;
+      const float v = (float)drRate[idx0] * (1.0f - frac) + (float)drRate[idx1] * frac;
+      int h = (int)((long)(v + 0.5f) * gh / scale);
+      if (h > gh) h = gh;
+      if (h < 0) h = 0;
+      const int top = kDrGraphBottom - h;
+      if (h > 0) display.drawFastVLine(x, top, h, fillCol);
+      const uint16_t lc = (drAlarmArmed && v >= (float)drThreshold) ? kBad : kAccent;
+      display.drawFastVLine(x, top, h > 1 ? 2 : 1, lc);
+    }
+  }
+
   const int alarmY = kDrGraphBottom - (int)((long)drThreshold * gh / scale);
   for (int x = 0; x < kScreenWidth; x += 6)
     display.drawFastHLine(x, alarmY, 3, kWarn);
+  display.setTextSize(1);
+  display.setTextColor(kBad, kBackground);
+  display.setCursor(2, (alarmY - 10 > kDrGraphTop) ? alarmY - 10 : alarmY + 2);
+  display.print("alarm");
 
-  for (int i = 0; i < drFill; ++i) {
-    const int idx = (drHead - drFill + i + kDeauthRateSamples * 2) % kDeauthRateSamples;
-    const int v = drRate[idx];
-    int h = (int)((long)v * gh / scale);
-    if (h > gh) h = gh;
-    const int x = i + (kScreenWidth - kDeauthRateSamples) / 2;
-    const uint16_t c = (drAlarmArmed && v >= drThreshold) ? kBad : kAccent;
-    if (h > 0) display.drawFastVLine(x, kDrGraphBottom - h, h, c);
-  }
   display.drawFastHLine(0, kDrGraphBottom, kScreenWidth, kMuted);
+
+  if (drFill > 0) {
+    const int lastIdx = (drHead - 1 + kDeauthRateSamples) % kDeauthRateSamples;
+    int hv = (int)((long)drRate[lastIdx] * gh / scale);
+    if (hv > gh) hv = gh;
+    display.fillCircle(kScreenWidth - 4, kDrGraphBottom - hv, 3, kDrMarker);
+  }
 
   if (alarm) display.drawRect(0, kDrTop, kScreenWidth, kDrGraphBottom - kDrTop, kBad);
 
-  drawThreeButtonFooter(deauthForensicsActive ? "Back" : "Back",
-                        drAlarmArmed ? "Watch*" : "Watch", "Clear");
+  drawThreeButtonFooter("Back", drAlarmArmed ? "Watch*" : "Watch", "Clear");
 }
 
 void updateDeauthRate() {
