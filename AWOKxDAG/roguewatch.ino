@@ -149,7 +149,7 @@ void drawRogueWatch() {
   if (counterPineappleArmed()) {
     display.setTextColor(kBad, kBackground);
     display.setCursor(6, 88);
-    display.printf("COUNTER ARMED | twin-only | %lu fired",
+    display.printf("COUNTER-ROGUE | twin-only | %lu fired",
                    (unsigned long)counterPineappleFires());
   }
 

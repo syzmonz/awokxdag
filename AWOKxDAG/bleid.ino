@@ -120,7 +120,7 @@ uint16_t bleClusterFor(const char* addr) {
 void drawBleId() {
   currentView = View::kBleId;
   display.fillScreen(kBackground);
-  drawHeader("BLE ID", "advertiser clusters");
+  drawHeader("BLE ID", "advert -> devices");
 
   int confirmed = 0;
   for (int i = 0; i < bleClusterCount; ++i)
@@ -129,13 +129,13 @@ void drawBleId() {
   display.setTextSize(1);
   display.setTextColor(kGood, kBackground);
   display.setCursor(8, 48);
-  display.printf("%d conf", confirmed);
+  display.printf("%d tracked", confirmed);
   display.setTextColor(kMuted, kBackground);
-  display.setCursor(80, 48);
+  display.setCursor(110, 48);
   display.printf("%d seen", bleClusterCount);
   if (bleIdEvictions > 0) {
     display.setTextColor(kWarn, kBackground);
-    display.setCursor(168, 48);
+    display.setCursor(190, 48);
     display.printf("ev%lu", (unsigned long)bleIdEvictions);
   }
   display.drawFastHLine(0, 62, kScreenWidth, 0x18E3);
@@ -171,8 +171,22 @@ void drawBleId() {
 
   if (bleClusterCount == 0) {
     display.setTextColor(kMuted, kBackground);
-    display.setCursor(52, 150);
-    display.print("Scan for BLE gear");
+    display.setCursor(18, 140);
+    display.print("Tap Scan to sample BLE adverts");
+    display.setCursor(18, 158);
+    display.print("Devices rotate their BLE MAC;");
+    display.setCursor(18, 172);
+    display.print("same advert shape = 1 device.");
+    display.setTextColor(kGood, kBackground);
+    display.setCursor(18, 192);
+    display.print("x2+ addr on one ID = tracked");
+  } else {
+    const int legendY = 70 + shown * 26 + 2;
+    if (legendY <= 250) {
+      display.setTextColor(kMuted, kBackground);
+      display.setCursor(8, legendY);
+      display.print("xN=addrs merged  R=random addr");
+    }
   }
 
   drawThreeButtonFooter("Back", "Scan", "Clear");

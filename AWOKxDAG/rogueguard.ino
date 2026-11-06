@@ -21,7 +21,7 @@ void counterPineappleToggle() {
     cpArmed = false;
     return;
   }
-  if (!confirmActiveTest("Counter-pineapple")) return;
+  if (!confirmActiveTest("Counter-rogue")) return;
   cpArmed = true;
 }
 

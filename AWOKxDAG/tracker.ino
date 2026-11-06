@@ -59,6 +59,25 @@ uint8_t trackerClassify(const NimBLEAdvertisedDevice* device) {
   return 0;
 }
 
+static uint32_t trackerFingerprint(const NimBLEAdvertisedDevice* device) {
+  uint32_t fp = 2166136261u;
+  if (device->haveManufacturerData()) {
+    const std::string mfg = device->getManufacturerData();
+    for (int i = 0; i < 3 && i < static_cast<int>(mfg.length()); ++i)
+      fp = (fp ^ static_cast<uint8_t>(mfg[i])) * 16777619u;
+  }
+  for (int i = 0; i < device->getServiceUUIDCount(); ++i) {
+    const std::string u = device->getServiceUUID(i).toString();
+    for (size_t k = 0; k < u.size(); ++k) fp = (fp ^ static_cast<uint8_t>(u[k])) * 16777619u;
+  }
+  for (int i = 0; i < device->getServiceDataCount(); ++i) {
+    const std::string u = device->getServiceDataUUID(i).toString();
+    for (size_t k = 0; k < u.size(); ++k) fp = (fp ^ static_cast<uint8_t>(u[k])) * 16777619u;
+  }
+  fp = (fp ^ static_cast<uint32_t>(device->getAddressType())) * 16777619u;
+  return fp;
+}
+
 class TrackerScanCallbacks : public NimBLEScanCallbacks {
  public:
   void onResult(const NimBLEAdvertisedDevice* device) override {
@@ -74,6 +93,7 @@ class TrackerScanCallbacks : public NimBLEScanCallbacks {
     hit.addr[n] = 0;
     hit.rssi = device->getRSSI();
     hit.kind = kind;
+    hit.fp = trackerFingerprint(device);
     trackerHitHead = next;
   }
 };
@@ -99,11 +119,27 @@ void mergeTrackerHit(const TrackerHit& hit) {
   }
   TrackerEntry& entry = trackerEntries[index];
   entry.kind = hit.kind;
+  entry.fp = hit.fp;
   entry.rssi = hit.rssi;
   entry.lastSeenMs = now;
   ++entry.sightings;
-  entry.following = (entry.lastSeenMs - entry.firstSeenMs) >= kTrackerFollowMs &&
-                    entry.sightings >= kTrackerMinSightings;
+}
+
+void recomputeTrackerFollowing() {
+  for (int i = 0; i < trackerCount; ++i) {
+    uint32_t earliest = trackerEntries[i].firstSeenMs;
+    uint32_t latest = trackerEntries[i].lastSeenMs;
+    uint32_t sum = 0;
+    for (int j = 0; j < trackerCount; ++j) {
+      if (trackerEntries[j].kind != trackerEntries[i].kind) continue;
+      if (trackerEntries[j].fp != trackerEntries[i].fp) continue;
+      if (trackerEntries[j].firstSeenMs < earliest) earliest = trackerEntries[j].firstSeenMs;
+      if (trackerEntries[j].lastSeenMs > latest) latest = trackerEntries[j].lastSeenMs;
+      sum += trackerEntries[j].sightings;
+    }
+    trackerEntries[i].following =
+        (latest - earliest) >= kTrackerFollowMs && sum >= kTrackerMinSightings;
+  }
 }
 
 void sortTrackers() {
@@ -235,6 +271,7 @@ void stopTrackerScan() {
   scan->stop();
   scan->clearResults();
   releaseBleMemory();
+  recomputeTrackerFollowing();
   lastTrackerCsvOk = exportTrackersToSd();
   Serial.printf("[tracker] stopped; %d tracker(s)\n", trackerCount);
 }
@@ -245,6 +282,7 @@ void updateTrackerScan() {
     mergeTrackerHit(trackerHitQueue[trackerHitTail]);
     trackerHitTail = (trackerHitTail + 1) % kTrackerHitQueueSlots;
   }
+  recomputeTrackerFollowing();
   const uint32_t now = millis();
   if (now - lastTrackerDrawMs >= kTrackerRedrawMs) {
     lastTrackerDrawMs = now;

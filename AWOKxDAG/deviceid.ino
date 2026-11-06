@@ -151,7 +151,7 @@ uint16_t deviceClusterFor(const uint8_t* mac) {
 void drawDeviceId() {
   currentView = View::kDeviceId;
   display.fillScreen(kBackground);
-  drawHeader("DEVICE ID", deviceIdActive ? "fingerprinting" : "idle");
+  drawHeader("DEVICE ID", deviceIdActive ? "probes -> devices" : "idle");
 
   int confirmed = 0;
   for (int i = 0; i < clusterCount; ++i)
@@ -160,15 +160,15 @@ void drawDeviceId() {
   display.setTextSize(1);
   display.setTextColor(kGood, kBackground);
   display.setCursor(8, 48);
-  display.printf("%d conf", confirmed);
+  display.printf("%d tracked", confirmed);
   display.setTextColor(kMuted, kBackground);
-  display.setCursor(74, 48);
+  display.setCursor(100, 48);
   display.printf("%d seen", clusterCount);
-  display.setCursor(148, 48);
-  display.printf("%lu pr", (unsigned long)totalProbes);
+  display.setCursor(166, 48);
+  display.printf("%lupr", (unsigned long)totalProbes);
   if (fpEvictions > 0) {
     display.setTextColor(kWarn, kBackground);
-    display.setCursor(196, 48);
+    display.setCursor(212, 48);
     display.printf("ev%lu", (unsigned long)fpEvictions);
   }
 
@@ -208,8 +208,22 @@ void drawDeviceId() {
 
   if (clusterCount == 0) {
     display.setTextColor(kMuted, kBackground);
-    display.setCursor(36, 150);
-    display.print("Listening for probes...");
+    display.setCursor(18, 140);
+    display.print("Listening for probe requests");
+    display.setCursor(18, 158);
+    display.print("Phones probe with random MACs;");
+    display.setCursor(18, 172);
+    display.print("same IE fingerprint = 1 device.");
+    display.setTextColor(kGood, kBackground);
+    display.setCursor(18, 192);
+    display.print("x2+ MAC on one ID = tracked");
+  } else {
+    const int legendY = 70 + shown * 26 + 2;
+    if (legendY <= 250) {
+      display.setTextColor(kMuted, kBackground);
+      display.setCursor(8, legendY);
+      display.print("xN=MACs merged  P=probes  R=random");
+    }
   }
 
   drawFooter("Back", "Clear");

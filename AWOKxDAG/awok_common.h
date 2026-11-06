@@ -132,7 +132,7 @@ constexpr uint8_t kDeauthHopChannels[] = {
 constexpr int kDeauthHopChannelCount =
     static_cast<int>(sizeof(kDeauthHopChannels) / sizeof(kDeauthHopChannels[0]));
 constexpr int kMaxDeauthTargets = 8;
-constexpr char kVersion[] = "1.7.8-pre.4";
+constexpr char kVersion[] = "1.7.8-pre.5";
 constexpr char kAuthor[] = "dag nazty";
 constexpr uint32_t kHandshakeRedrawMs = 500;
 constexpr uint32_t kHandshakePulseMs = 2000;
@@ -850,12 +850,14 @@ struct TrackerHit {
   char addr[18];
   int8_t rssi;
   uint8_t kind;  // 1 Apple Find My, 2 Tile, 3 Samsung SmartTag
+  uint32_t fp;
 };
 
 struct TrackerEntry {
   String addr;
   int32_t rssi = -127;
   uint8_t kind = 0;
+  uint32_t fp = 0;
   uint32_t firstSeenMs = 0;
   uint32_t lastSeenMs = 0;
   uint32_t sightings = 0;
