@@ -83,9 +83,9 @@ void drawWardriveMap() {
                             : (fix ? "fix 3D" : "fix --"));
 
   for (int gx = 40; gx < kScreenWidth; gx += 40)
-    display.drawFastVLine(gx, kWdmMapTop, kWdmMapBottom - kWdmMapTop, 0x1082);
+    display.drawFastVLine(gx, kWdmMapTop, kWdmMapBottom - kWdmMapTop, 0xFFFF);
   for (int gy = kWdmMapTop + 40; gy < kWdmMapBottom; gy += 40)
-    display.drawFastHLine(0, gy, kScreenWidth, 0x1082);
+    display.drawFastHLine(0, gy, kScreenWidth, 0xFFFF);
 
   if (wdmCount == 0 || !wdmHaveCentre) {
     display.setTextColor(kMuted, kBackground);

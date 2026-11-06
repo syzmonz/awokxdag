@@ -75,6 +75,8 @@ class GearBleCallbacks : public NimBLEScanCallbacks {
         type = kGearPwnagotchi;
       else if (n.indexOf("marauder") >= 0)
         type = kGearMarauder;
+      else if (n.indexOf("flipper") >= 0)
+        type = kGearFlipper;
     }
     if (type == kGearNone) return;
     const int next = (gearBleHitHead + 1) % kGearBleHitSlots;
@@ -257,8 +259,8 @@ void startGearSniff() {
   gearSched.exitWifi = gearExitWifi;
   gearSched.bleCallbacks = &gearBleCallbacks;
   gearSched.bleActiveScan = true;
-  gearSched.wifiWindowMs = 4000;
-  gearSched.bleWindowMs = 4000;
+  gearSched.wifiWindowMs = 3000;
+  gearSched.bleWindowMs = 3000;
   if (!radioSchedulerBegin(gearSched)) return;
 
   gearActive = true;

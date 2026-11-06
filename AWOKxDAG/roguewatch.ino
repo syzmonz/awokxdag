@@ -64,13 +64,29 @@ int rogueIndexOf(const uint8_t* bssid) {
   return -1;
 }
 
+static bool rogueSameOui(const uint8_t* a, const uint8_t* b) {
+  return a[0] == b[0] && a[1] == b[1] && a[2] == b[2];
+}
+
+static bool rogueIsSavedBssid(const uint8_t* bssid) {
+  const String mac = macToString(bssid);
+  for (int i = 0; i < savedCount; ++i)
+    if (savedEntries[i].bssid.equalsIgnoreCase(mac)) return true;
+  return false;
+}
+
 bool savedSsidOnOtherBssid(const ApSighting& ap) {
   for (int i = 0; i < savedCount; ++i) {
-    if (savedEntries[i].ssid.length() &&
-        savedEntries[i].ssid == ap.ssid &&
-        !savedEntries[i].bssid.equalsIgnoreCase(macToString(ap.bssid))) {
-      return true;
-    }
+    if (!savedEntries[i].ssid.length()) continue;
+    if (savedEntries[i].ssid != ap.ssid) continue;
+    uint8_t sb[6];
+    if (!parseBssid(savedEntries[i].bssid, sb)) continue;
+    bool sameBssid = true;
+    for (int j = 0; j < 6; ++j)
+      if (sb[j] != ap.bssid[j]) { sameBssid = false; break; }
+    if (sameBssid) continue;
+    if (rogueSameOui(sb, ap.bssid)) continue;
+    return true;
   }
   return false;
 }
@@ -93,9 +109,16 @@ void appendRogueLog(const ApSighting& ap, const char* reason) {
 void recomputeRogue() {
   rogueAlertCount = 0;
   for (int i = 0; i < rogueApCount; ++i) {
+    if (rogueIsSavedBssid(rogueAps[i].bssid)) {
+      rogueAps[i].savedTwin = false;
+      rogueAps[i].suspicious = false;
+      continue;
+    }
     bool multi = false;
     for (int j = 0; j < rogueApCount; ++j) {
-      if (j != i && rogueAps[j].ssid == rogueAps[i].ssid) {
+      if (j == i) continue;
+      if (rogueAps[j].ssid != rogueAps[i].ssid) continue;
+      if (!rogueSameOui(rogueAps[j].bssid, rogueAps[i].bssid)) {
         multi = true;
         break;
       }
