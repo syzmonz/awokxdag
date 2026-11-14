@@ -259,12 +259,15 @@ static const char* rcModeLabel(int m) {
 void drawReconCapture() {
   currentView = View::kReconCapture;
   display.fillScreen(kBackground);
-  char sub[24];
+  char sub[32];
   if (millis() < rcHintUntilMs) {
     strncpy(sub, "pick target 1st", sizeof(sub));
     sub[sizeof(sub) - 1] = 0;
+  } else if (rcActive && rcSelected >= 0 && rcMode == 1) {
+    snprintf(sub, sizeof(sub), "lock ch%u | %lusv",
+             rcTargets[rcSelected].channel, (unsigned long)reconPcapFrames);
   } else if (rcActive) {
-    snprintf(sub, sizeof(sub), "saved %lu", (unsigned long)reconPcapFrames);
+    snprintf(sub, sizeof(sub), "hop | %lu sv", (unsigned long)reconPcapFrames);
   } else {
     strncpy(sub, "idle", sizeof(sub));
     sub[sizeof(sub) - 1] = 0;
@@ -328,6 +331,10 @@ void drawReconCapture() {
     display.setTextColor(kMuted, kBackground);
     display.setCursor(40, 150);
     display.print("Listening for EAPOL...");
+  } else if (rcSelected < 0) {
+    display.setTextColor(kMuted, kBackground);
+    display.setCursor(8, 262);
+    display.print("Pick a target to lock + capture");
   }
 
   drawFourButtonFooter("Mode", "Pick", rcPulse ? "Pulse*" : "Pulse", "Back");
@@ -346,6 +353,15 @@ void reconCapturePick() {
   }
   rcSelected = rcSelected + 1;
   if (rcSelected >= rcTargetCount) rcSelected = -1;
+  if (rcSelected >= 0 && rcTargets[rcSelected].channel >= 1 &&
+      rcTargets[rcSelected].channel <= 177) {
+    rcMode = 1;
+    esp_wifi_set_channel(rcTargets[rcSelected].channel, WIFI_SECOND_CHAN_NONE);
+  } else {
+    rcMode = 0;
+    rcHopIdx = 0;
+    lastReconHopMs = millis();
+  }
 }
 
 void reconCaptureTogglePulse() {

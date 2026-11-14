@@ -259,8 +259,8 @@ void startGearSniff() {
   gearSched.exitWifi = gearExitWifi;
   gearSched.bleCallbacks = &gearBleCallbacks;
   gearSched.bleActiveScan = true;
-  gearSched.wifiWindowMs = 3000;
-  gearSched.bleWindowMs = 3000;
+  gearSched.wifiWindowMs = 2500;
+  gearSched.bleWindowMs = 2500;
   if (!radioSchedulerBegin(gearSched)) return;
 
   gearActive = true;
