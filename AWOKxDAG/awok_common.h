@@ -132,7 +132,7 @@ constexpr uint8_t kDeauthHopChannels[] = {
 constexpr int kDeauthHopChannelCount =
     static_cast<int>(sizeof(kDeauthHopChannels) / sizeof(kDeauthHopChannels[0]));
 constexpr int kMaxDeauthTargets = 8;
-constexpr char kVersion[] = "1.7.8-pre.8";
+constexpr char kVersion[] = "1.7.8-pre.9";
 constexpr char kAuthor[] = "dag nazty";
 constexpr uint32_t kHandshakeRedrawMs = 500;
 constexpr uint32_t kHandshakePulseMs = 2000;
@@ -661,6 +661,7 @@ struct RogueHit {
   uint8_t channel;
   int8_t rssi;
   uint8_t ssidLen;
+  bool secured;
   char ssid[33];
 };
 
@@ -669,6 +670,7 @@ struct ApSighting {
   uint8_t bssid[6] = {0};
   uint8_t channel = 0;
   int32_t rssi = -127;
+  bool secured = false;
   bool suspicious = false;
   bool savedTwin = false;  // matches a saved SSID on a different BSSID
   bool logged = false;

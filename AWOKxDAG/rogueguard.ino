@@ -40,7 +40,7 @@ void counterPineappleOnTwin(const uint8_t* bssid, int channel, const char* ssid)
   uint8_t frame[26];
   esp_wifi_set_channel((uint8_t)channel, WIFI_SECOND_CHAN_NONE);
   buildDeauthFrame(frame, broadcast, bssid, 0xC0);
-  for (int k = 0; k < 3; ++k)
+  for (int k = 0; k < 6; ++k)
     esp_wifi_80211_tx(WIFI_IF_STA, frame, sizeof(frame), false);
   ++cpFireCount;
 

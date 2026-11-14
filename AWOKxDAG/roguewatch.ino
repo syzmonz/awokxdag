@@ -45,6 +45,7 @@ void rogueBeaconCallback(void* buf, wifi_promiscuous_pkt_type_t type) {
   hit.channel = packet->rx_ctrl.channel;
   hit.rssi = packet->rx_ctrl.rssi;
   hit.ssidLen = tagLen;
+  hit.secured = (payload[34] & 0x10) != 0;
   memcpy(hit.ssid, payload + 38, tagLen);
   hit.ssid[tagLen] = 0;
   rogueHead = next;
@@ -75,20 +76,26 @@ static bool rogueIsSavedBssid(const uint8_t* bssid) {
   return false;
 }
 
+static int rogueSavedIndexForSsid(const String& ssid) {
+  if (!ssid.length()) return -1;
+  for (int i = 0; i < savedCount; ++i)
+    if (savedEntries[i].ssid.length() && savedEntries[i].ssid == ssid) return i;
+  return -1;
+}
+
 bool savedSsidOnOtherBssid(const ApSighting& ap) {
-  for (int i = 0; i < savedCount; ++i) {
-    if (!savedEntries[i].ssid.length()) continue;
-    if (savedEntries[i].ssid != ap.ssid) continue;
-    uint8_t sb[6];
-    if (!parseBssid(savedEntries[i].bssid, sb)) continue;
+  const int s = rogueSavedIndexForSsid(ap.ssid);
+  if (s < 0) return false;
+  uint8_t sb[6];
+  if (parseBssid(savedEntries[s].bssid, sb)) {
     bool sameBssid = true;
     for (int j = 0; j < 6; ++j)
       if (sb[j] != ap.bssid[j]) { sameBssid = false; break; }
-    if (sameBssid) continue;
-    if (rogueSameOui(sb, ap.bssid)) continue;
-    return true;
+    if (sameBssid) return false;
+    if (rogueSameOui(sb, ap.bssid)) return false;
   }
-  return false;
+  const bool savedSecured = savedEntries[s].auth != WIFI_AUTH_OPEN;
+  return ap.secured != savedSecured;
 }
 
 void appendRogueLog(const ApSighting& ap, const char* reason) {
@@ -109,31 +116,40 @@ void appendRogueLog(const ApSighting& ap, const char* reason) {
 void recomputeRogue() {
   rogueAlertCount = 0;
   for (int i = 0; i < rogueApCount; ++i) {
-    if (rogueIsSavedBssid(rogueAps[i].bssid)) {
-      rogueAps[i].savedTwin = false;
-      rogueAps[i].suspicious = false;
-      continue;
-    }
-    bool multi = false;
-    for (int j = 0; j < rogueApCount; ++j) {
-      if (j == i) continue;
-      if (rogueAps[j].ssid != rogueAps[i].ssid) continue;
-      if (!rogueSameOui(rogueAps[j].bssid, rogueAps[i].bssid)) {
+    ApSighting& ap = rogueAps[i];
+    ap.savedTwin = false;
+    ap.suspicious = false;
+
+    if (rogueIsSavedBssid(ap.bssid)) continue;
+
+    const int s = rogueSavedIndexForSsid(ap.ssid);
+    if (s >= 0) {
+      uint8_t sb[6];
+      const bool sameOui =
+          parseBssid(savedEntries[s].bssid, sb) && rogueSameOui(sb, ap.bssid);
+      const bool savedSecured = savedEntries[s].auth != WIFI_AUTH_OPEN;
+      if (sameOui || ap.secured == savedSecured) continue;
+      ap.savedTwin = true;
+      ap.suspicious = true;
+      counterPineappleOnTwin(ap.bssid, ap.channel, ap.ssid.c_str());
+    } else {
+      bool multi = false;
+      for (int j = 0; j < rogueApCount; ++j) {
+        if (j == i) continue;
+        if (rogueAps[j].ssid != ap.ssid) continue;
+        if (rogueSameOui(rogueAps[j].bssid, ap.bssid)) continue;
+        if (rogueAps[j].secured == ap.secured) continue;
         multi = true;
         break;
       }
+      ap.suspicious = multi;
     }
-    rogueAps[i].savedTwin = savedSsidOnOtherBssid(rogueAps[i]);
-    if (rogueAps[i].savedTwin)
-      counterPineappleOnTwin(rogueAps[i].bssid, rogueAps[i].channel,
-                             rogueAps[i].ssid.c_str());
-    rogueAps[i].suspicious = multi || rogueAps[i].savedTwin;
-    if (rogueAps[i].suspicious) {
+
+    if (ap.suspicious) {
       ++rogueAlertCount;
-      if (!rogueAps[i].logged) {
-        appendRogueLog(rogueAps[i],
-                       rogueAps[i].savedTwin ? "saved_twin" : "multi_bssid");
-        rogueAps[i].logged = true;
+      if (!ap.logged) {
+        appendRogueLog(ap, ap.savedTwin ? "saved_twin" : "multi_bssid");
+        ap.logged = true;
       }
     }
   }
@@ -150,6 +166,7 @@ void mergeRogueHit(const RogueHit& hit) {
   rogueAps[index].ssid = String(hit.ssid);
   rogueAps[index].channel = hit.channel;
   rogueAps[index].rssi = hit.rssi;
+  rogueAps[index].secured = hit.secured;
   recomputeRogue();
 }
 
@@ -169,11 +186,18 @@ void drawRogueWatch() {
   display.setCursor(6, 78);
   display.printf("%d AP(s) seen | %d alert(s) | ch %d", rogueApCount,
                  rogueAlertCount, kDeauthHopChannels[rogueHopIndex]);
+  bool hasTwin = false;
+  for (int i = 0; i < rogueApCount; ++i)
+    if (rogueAps[i].savedTwin) { hasTwin = true; break; }
   if (counterPineappleArmed()) {
     display.setTextColor(kBad, kBackground);
     display.setCursor(6, 88);
     display.printf("COUNTER-ROGUE | twin-only | %lu fired",
                    (unsigned long)counterPineappleFires());
+  } else if (hasTwin) {
+    display.setTextColor(kWarn, kBackground);
+    display.setCursor(6, 88);
+    display.print("evil twin seen - tap Arm to counter");
   }
 
   int row = 0;
@@ -187,8 +211,10 @@ void drawRogueWatch() {
                           20));
     display.setTextColor(kMuted, kBackground);
     display.setCursor(6, y + 9);
-    display.printf("%s %s", macToString(rogueAps[i].bssid).c_str(),
-                   rogueAps[i].savedTwin ? "saved-twin" : "multi-BSSID");
+    const char* tag = rogueAps[i].savedTwin
+                          ? (counterPineappleArmed() ? "TWIN>DEAUTH" : "OPEN TWIN")
+                          : "multi-BSSID";
+    display.printf("%s %s", macToString(rogueAps[i].bssid).c_str(), tag);
     ++row;
   }
   if (rogueAlertCount == 0) {
